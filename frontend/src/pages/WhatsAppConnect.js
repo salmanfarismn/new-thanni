@@ -100,6 +100,44 @@ export default function WhatsAppConnect() {
     }
   };
 
+  const handleSendTestMessage = async () => {
+    if (!testPhone || testPhone.length < 10) {
+      toast.error('Please enter a valid phone number');
+      return;
+    }
+
+    try {
+      setSendingTest(true);
+      
+      // Send test webhook to simulate customer message
+      const response = await api.post('/whatsapp/webhook', {
+        entry: [{
+          changes: [{
+            value: {
+              messages: [{
+                from: testPhone,
+                id: `test_${Date.now()}`,
+                timestamp: Math.floor(Date.now() / 1000),
+                type: 'text',
+                text: { body: 'Hi' }
+              }],
+              contacts: [{ profile: { name: 'Test User' } }]
+            }
+          }]
+        }]
+      });
+
+      if (response.data.processed) {
+        toast.success('Test message sent! Check if you received WhatsApp reply.');
+      }
+    } catch (error) {
+      console.error('Error sending test message:', error);
+      toast.error('Failed to send test message');
+    } finally {
+      setSendingTest(false);
+    }
+  };
+
   const DisconnectModal = () => {
     if (!showDisconnectModal) return null;
 
