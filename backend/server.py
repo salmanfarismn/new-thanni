@@ -97,15 +97,18 @@ class DeliveryUpdate(BaseModel):
 
 async def send_whatsapp_message(phone_number: str, message: str):
     try:
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                f"{WHATSAPP_SERVICE_URL}/send",
-                json={"phone_number": phone_number, "message": message},
-                timeout=10.0
-            )
-            return response.json()
+        result = await whatsapp_api.send_text_message(phone_number, message)
+        return result
     except Exception as e:
         logging.error(f"Failed to send WhatsApp message: {e}")
+        return {"success": False, "error": str(e)}
+
+async def send_whatsapp_buttons(phone_number: str, body_text: str, buttons: list, header: str = None):
+    try:
+        result = await whatsapp_api.send_interactive_buttons(phone_number, body_text, buttons, header=header)
+        return result
+    except Exception as e:
+        logging.error(f"Failed to send WhatsApp buttons: {e}")
         return {"success": False, "error": str(e)}
 
 async def get_or_create_customer(phone_number: str, name: str = None, address: str = None):
