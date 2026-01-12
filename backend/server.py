@@ -449,6 +449,120 @@ async def handle_customer_message(phone_number: str, message_text: str):
 async def handle_delivery_boy_message(phone_number: str, message_text: str, delivery_person: dict):
     """Handle delivery boy status updates"""
     try:
+        # Find latest pending order for this delivery person
+        pending_orders = await db.orders.find({
+            "delivery_staff_id": delivery_person['staff_id'],
+            "status": {"$in": ["pending", "delivered"]}
+        }).sort("created_at", -1).limit(1).to_list(1)
+        
+        if not pending_orders:
+            await send_whatsapp_message(
+                phone_number,
+                "No pending orders found for you."
+            )
+            return
+        
+        order = pending_orders[0]
+        
+        # Handle "Delivered" button
+        if 'delivered' in message_text or message_text == 'delivered_btn':
+            if order['status'] == 'pending':
+                await db.orders.update_one(
+                    {"order_id": order['order_id']},
+                    {"$set": {
+                        "status": "delivered",
+                        "delivered_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                
+                await db.delivery_staff.update_one(
+                    {"staff_id": delivery_person['staff_id']},
+                    {"$inc": {"active_orders_count": -1}}
+                )
+                
+                # Ask for payment status
+                await send_whatsapp_buttons(
+                    phone_number,
+                    f"✅ Order {order['order_id']} marked as DELIVERED!\n\nAmount to collect: ₹{order['amount']}\n\nPayment received?",
+                    [
+                        {"id": "paid_cash", "title": "💵 Paid - Cash"},
+                        {"id": "paid_upi", "title": "📱 Paid - UPI"},
+                        {"id": "not_paid", "title": "⏳ Not Paid"}
+                    ]
+                )
+            else:
+                await send_whatsapp_message(
+                    phone_number,
+                    f"Order {order['order_id']} already marked as delivered."
+                )
+        
+        # Handle payment buttons
+        elif message_text in ['paid_cash', 'paid cash', 'cash']:
+            await db.orders.update_one(
+                {"order_id": order['order_id']},
+                {"$set": {
+                    "payment_status": "paid",
+                    "payment_method": "cash"
+                }}
+            )
+            await send_whatsapp_message(
+                phone_number,
+                f"✅ Payment recorded!\n\nOrder {order['order_id']}\nAmount: ₹{order['amount']}\nMethod: Cash\n\nGreat work! 👍"
+            )
+        
+        elif message_text in ['paid_upi', 'paid upi', 'upi']:
+            await db.orders.update_one(
+                {"order_id": order['order_id']},
+                {"$set": {
+                    "payment_status": "paid",
+                    "payment_method": "upi"
+                }}
+            )
+            await send_whatsapp_message(
+                phone_number,
+                f"✅ Payment recorded!\n\nOrder {order['order_id']}\nAmount: ₹{order['amount']}\nMethod: UPI\n\nGreat work! 👍"
+            )
+        
+        elif message_text in ['not_paid', 'not paid', 'pending']:
+            await send_whatsapp_message(
+                phone_number,
+                f"⏳ Payment pending for Order {order['order_id']}\n\nRemember to collect ₹{order['amount']} from customer."
+            )
+        
+        else:
+            await send_whatsapp_message(
+                phone_number,
+                f"Current Order: {order['order_id']}\n\nPlease update status:\n• Send 'DELIVERED' when done\n• Or use the buttons sent earlier"
+            )
+    
+    except Exception as e:
+        logging.error(f"Error processing delivery boy message: {e}")
+        await send_whatsapp_message(
+            phone_number,
+            "Sorry, something went wrong. Please try again."
+        )
+
+@api_router.post("/whatsapp/message", response_model=MessageResponse)
+async def handle_whatsapp_message_legacy(message_data: IncomingMessage):
+    """Legacy endpoint for backward compatibility"""
+    try:
+        phone_number = message_data.phone_number
+        message_text = message_data.message.strip().lower()
+
+        await process_customer_message(phone_number, message_text)
+        
+        return MessageResponse(reply="Message processed", success=True)
+
+    except Exception as e:
+        logging.error(f"Error processing message: {e}")
+        return MessageResponse(
+            reply="Sorry, something went wrong. Please try again.",
+            success=False
+        )
+
+async def handle_delivery_boy_message(phone_number: str, message_text: str, delivery_person: dict):
+    """Handle delivery boy status updates"""
+    try:
         if message_text.startswith('delivered') or message_text.startswith('paid'):
             pending_orders = await db.orders.find({
                 "delivery_staff_id": delivery_person['staff_id'],
