@@ -197,12 +197,13 @@ export default function WhatsAppConnect() {
         <div className="flex items-start gap-3">
           <AlertTriangle className="text-amber-600 flex-shrink-0 mt-0.5" size={24} />
           <div>
-            <h3 className="font-bold text-amber-900 mb-2">⚠️ Important Safety Warning</h3>
+            <h3 className="font-bold text-amber-900 mb-2">⚠️ Important: Use Your Business WhatsApp</h3>
             <div className="text-sm text-amber-800 space-y-1">
-              <p className="font-semibold">DO NOT use your personal WhatsApp number for this integration!</p>
-              <p>• Use a dedicated test number or business line</p>
-              <p>• Personal numbers may get flagged or banned by WhatsApp</p>
-              <p>• You can disconnect safely at any time using the disconnect button below</p>
+              <p>• This connects YOUR WhatsApp number as the business contact</p>
+              <p>• Customers will message this number to place orders</p>
+              <p>• You can still use WhatsApp normally on your phone</p>
+              <p>• The system automates responses for customer orders only</p>
+              <p>• Disconnect anytime to stop automation</p>
             </div>
           </div>
         </div>
