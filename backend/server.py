@@ -96,17 +96,47 @@ class DeliveryUpdate(BaseModel):
     payment_method: Optional[str] = None
 
 async def send_whatsapp_message(phone_number: str, message: str):
+    """Send WhatsApp message using available method (Cloud API or Baileys)"""
     try:
-        result = await whatsapp_api.send_text_message(phone_number, message)
-        return result
+        # Try Cloud API first if configured
+        if whatsapp_api.phone_number_id and whatsapp_api.access_token:
+            result = await whatsapp_api.send_text_message(phone_number, message)
+            if result.get('success'):
+                return result
+        
+        # Fallback to Baileys service
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{WHATSAPP_SERVICE_URL}/send",
+                json={"phone_number": phone_number, "message": message},
+                timeout=10.0
+            )
+            return response.json()
     except Exception as e:
         logging.error(f"Failed to send WhatsApp message: {e}")
         return {"success": False, "error": str(e)}
 
 async def send_whatsapp_buttons(phone_number: str, body_text: str, buttons: list, header: str = None):
+    """Send WhatsApp buttons using available method"""
     try:
-        result = await whatsapp_api.send_interactive_buttons(phone_number, body_text, buttons, header=header)
-        return result
+        # Try Cloud API first if configured
+        if whatsapp_api.phone_number_id and whatsapp_api.access_token:
+            result = await whatsapp_api.send_interactive_buttons(phone_number, body_text, buttons, header=header)
+            if result.get('success'):
+                return result
+        
+        # Fallback to Baileys with text format
+        button_text = body_text + "\n\n"
+        for i, btn in enumerate(buttons, 1):
+            button_text += f"{i}. {btn['title']}\n"
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{WHATSAPP_SERVICE_URL}/send",
+                json={"phone_number": phone_number, "message": button_text},
+                timeout=10.0
+            )
+            return response.json()
     except Exception as e:
         logging.error(f"Failed to send WhatsApp buttons: {e}")
         return {"success": False, "error": str(e)}
