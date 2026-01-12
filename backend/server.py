@@ -125,6 +125,51 @@ async def get_next_delivery_staff():
         return staff[0]
     return None
 
+async def get_active_delivery_staff_for_shift():
+    """Get delivery staff active for current time shift"""
+    current_hour = datetime.now(timezone.utc).hour
+    
+    if 6 <= current_hour < 14:
+        shift = "morning"
+    else:
+        shift = "evening"
+    
+    today = date.today().isoformat()
+    
+    active_shifts = await db.delivery_shifts.find({
+        "date": today,
+        "is_active": True,
+        "$or": [
+            {"shift": shift},
+            {"shift": "full_day"}
+        ]
+    }).to_list(100)
+    
+    if not active_shifts:
+        return None, None
+    
+    staff_ids = [s['staff_id'] for s in active_shifts]
+    
+    staff = await db.delivery_staff.find({
+        "staff_id": {"$in": staff_ids}
+    }).sort("active_orders_count", 1).limit(1).to_list(1)
+    
+    if staff:
+        return staff[0], shift
+    return None, None
+
+async def get_price_for_litre(litre_size: int):
+    """Get current price for a litre size"""
+    price_setting = await db.price_settings.find_one({
+        "litre_size": litre_size,
+        "is_active": True
+    })
+    
+    if price_setting:
+        return price_setting['price_per_can']
+    
+    return 50.0
+
 async def get_today_stock():
     today = date.today().isoformat()
     stock = await db.stock.find_one({"date": today}, {"_id": 0})
