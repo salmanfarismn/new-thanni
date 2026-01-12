@@ -230,11 +230,10 @@ export default function WhatsAppConnect() {
             </div>
           </div>
 
-          {/* Disconnect Button */}
           <div className="bg-white rounded-2xl p-6 border border-slate-200">
-            <h2 className="text-lg font-semibold text-slate-900 mb-3">Connection Management</h2>
+            <h2 className="text-lg font-semibold text-slate-900 mb-3">Automation Management</h2>
             <p className="text-sm text-slate-600 mb-4">
-              Need to disconnect? Click the button below to safely logout and clear your session.
+              Need to stop automation temporarily? Disconnect to pause all automated responses. Your WhatsApp will continue working normally on your phone.
             </p>
             <button
               onClick={() => setShowDisconnectModal(true)}
@@ -242,7 +241,7 @@ export default function WhatsAppConnect() {
               className="w-full bg-red-500 text-white py-3 rounded-xl font-semibold hover:bg-red-600 transition-all shadow-sm active:scale-95 flex items-center justify-center gap-2"
             >
               <LogOut size={20} />
-              Disconnect WhatsApp
+              Stop Automation (Disconnect)
             </button>
           </div>
 
