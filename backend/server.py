@@ -220,7 +220,7 @@ async def receive_whatsapp_webhook(request: Request):
         await whatsapp_api.mark_message_as_read(message_data["message_id"])
         
         # Process the message
-        response = await handle_whatsapp_message_webhook(message_data)
+        await handle_whatsapp_message_webhook(message_data)
         
         return {"status": "ok", "processed": True}
     
