@@ -716,6 +716,7 @@ async def create_delivery_staff(staff: DeliveryStaff):
 
 @api_router.get("/whatsapp/qr")
 async def get_qr_code():
+    """Get QR code for connecting owner's WhatsApp"""
     try:
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{WHATSAPP_SERVICE_URL}/qr", timeout=5.0)
@@ -725,10 +726,29 @@ async def get_qr_code():
 
 @api_router.get("/whatsapp/status")
 async def get_whatsapp_status():
+    """Check WhatsApp connection status"""
     try:
+        # Check Baileys service first
         async with httpx.AsyncClient() as client:
             response = await client.get(f"{WHATSAPP_SERVICE_URL}/status", timeout=5.0)
-            return response.json()
+            baileys_status = response.json()
+            
+            if baileys_status.get('connected'):
+                return {
+                    "connected": True,
+                    "method": "baileys",
+                    "user": baileys_status.get('user')
+                }
+        
+        # Check Cloud API if configured
+        if whatsapp_api.phone_number_id and whatsapp_api.access_token:
+            return {
+                "connected": True,
+                "method": "cloud_api",
+                "phone_number_id": whatsapp_api.phone_number_id
+            }
+        
+        return {"connected": False, "method": None}
     except Exception as e:
         return {"connected": False, "error": str(e)}
 
