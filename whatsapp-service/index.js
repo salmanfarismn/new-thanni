@@ -72,19 +72,30 @@ async function handleIncomingMessage(message) {
 
         console.log(`Received message from ${phoneNumber}: ${messageText}`);
 
-        const response = await axios.post(`${FASTAPI_URL}/api/whatsapp/message`, {
-            phone_number: phoneNumber,
-            message: messageText,
-            message_id: message.key.id,
-            timestamp: message.messageTimestamp
+        // Forward to FastAPI backend (Cloud API webhook endpoint)
+        const response = await axios.post(`${FASTAPI_URL}/api/whatsapp/webhook`, {
+            entry: [{
+                changes: [{
+                    value: {
+                        messages: [{
+                            from: phoneNumber,
+                            id: message.key.id,
+                            timestamp: message.messageTimestamp,
+                            type: 'text',
+                            text: { body: messageText }
+                        }],
+                        contacts: [{
+                            profile: { name: 'Customer' }
+                        }]
+                    }
+                }]
+            }]
         });
 
-        if (response.data.reply) {
-            await sendMessage(phoneNumber, response.data.reply);
-        }
+        console.log(`Message forwarded to backend: ${response.status}`);
 
     } catch (error) {
-        console.error('Error handling incoming message:', error);
+        console.error('Error handling incoming message:', error.message);
     }
 }
 
