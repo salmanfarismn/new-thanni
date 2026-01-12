@@ -126,7 +126,7 @@ function App() {
             <Route path="/" element={<Dashboard />} />
             <Route path="/orders" element={<Orders />} />
             <Route path="/stock" element={<Stock />} />
-            <Route path="/whatsapp" element={<WhatsAppConnect />} />
+            <Route path="/settings" element={<Settings />} />
           </Routes>
         </AppLayout>
       </BrowserRouter>
