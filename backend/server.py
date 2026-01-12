@@ -189,6 +189,79 @@ async def get_today_stock():
         await db.stock.insert_one(stock)
     return stock
 
+@api_router.get("/whatsapp/webhook", response_class=PlainTextResponse)
+async def verify_whatsapp_webhook(request: Request):
+    """Verify WhatsApp webhook during setup"""
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+    verify_token = os.environ.get('WHATSAPP_VERIFY_TOKEN', 'default_verify_token')
+    
+    result = whatsapp_api.verify_webhook(mode, token, challenge, verify_token)
+    
+    if result:
+        return PlainTextResponse(result)
+    raise HTTPException(status_code=403, detail="Forbidden")
+
+@api_router.post("/whatsapp/webhook")
+async def receive_whatsapp_webhook(request: Request):
+    """Handle incoming WhatsApp messages via webhook"""
+    try:
+        body = await request.json()
+        logging.info(f"Received webhook: {body}")
+        
+        # Extract message data
+        message_data = whatsapp_api.extract_message_data(body)
+        
+        if not message_data:
+            return {"status": "ok"}
+        
+        # Mark message as read
+        await whatsapp_api.mark_message_as_read(message_data["message_id"])
+        
+        # Process the message
+        response = await handle_whatsapp_message_webhook(message_data)
+        
+        return {"status": "ok", "processed": True}
+    
+    except Exception as e:
+        logging.error(f"Error processing webhook: {e}")
+        return {"status": "error", "message": str(e)}
+
+async def handle_whatsapp_message_webhook(message_data: dict):
+    """Process incoming WhatsApp message and send response"""
+    try:
+        phone_number = message_data["from"]
+        message_text = message_data["text"].strip().lower()
+        button_id = message_data.get("button_id")
+        
+        # If it's a button response, use button_id as message
+        if button_id:
+            message_text = button_id.lower()
+        
+        logging.info(f"Processing message from {phone_number}: {message_text}")
+        
+        response = await process_customer_message(phone_number, message_text)
+        
+        return response
+    
+    except Exception as e:
+        logging.error(f"Error in webhook message handler: {e}")
+        return None
+
+async def process_customer_message(phone_number: str, message_text: str):
+    """Process customer or delivery boy message"""
+    # Check if it's a delivery boy
+    delivery_person = await db.delivery_staff.find_one({"phone_number": phone_number})
+    
+    if delivery_person:
+        return await handle_delivery_boy_message(phone_number, message_text, delivery_person)
+    else:
+        return await handle_customer_message(phone_number, message_text)
+
+async def handle_customer_message(phone_number: str, message_text: str):
+    """Handle customer order flow"""
+
 @api_router.post("/whatsapp/message", response_model=MessageResponse)
 async def handle_whatsapp_message(message_data: IncomingMessage):
     try:
