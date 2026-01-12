@@ -314,9 +314,9 @@ export default function WhatsAppConnect() {
               <div className="w-16 h-16 bg-sky-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
                 <QrCode className="text-sky-600" size={32} />
               </div>
-              <h2 className="text-xl font-semibold text-slate-900 mb-2">Scan QR Code</h2>
+              <h2 className="text-xl font-semibold text-slate-900 mb-2">Connect Your WhatsApp</h2>
               <p className="text-slate-600 mb-6 max-w-md mx-auto">
-                Open WhatsApp on your phone → Settings → Linked Devices → Link a Device
+                Scan this QR code with your WhatsApp to enable automation. Works like WhatsApp Web - you stay connected on your phone.
               </p>
               <div className="inline-block p-4 bg-white rounded-2xl border-2 border-slate-200 shadow-lg">
                 <img 
@@ -327,6 +327,17 @@ export default function WhatsAppConnect() {
                 />
               </div>
               <p className="text-sm text-slate-500 mt-4">QR code refreshes automatically every 60 seconds</p>
+              
+              <div className="bg-sky-50 border border-sky-200 rounded-xl p-4 mt-6 text-left">
+                <h3 className="font-semibold text-sky-900 text-sm mb-2">How to Scan:</h3>
+                <ol className="text-sm text-sky-800 space-y-1">
+                  <li>1. Open WhatsApp on your phone</li>
+                  <li>2. Tap Menu (⋮) → Linked Devices</li>
+                  <li>3. Tap "Link a Device"</li>
+                  <li>4. Point your phone at this screen to scan</li>
+                  <li>5. Your automation will activate instantly!</li>
+                </ol>
+              </div>
             </div>
           ) : (
             <div className="bg-white rounded-2xl p-12 border border-slate-200 text-center" data-testid="qr-loading">
