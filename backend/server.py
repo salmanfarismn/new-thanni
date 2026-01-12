@@ -574,42 +574,42 @@ async def reconnect_whatsapp():
 
 @api_router.get("/price-settings")
 async def get_price_settings():
-    settings = await db.price_settings.find({"is_active": True}, {"_id": 0}).to_list(100)
+    settings = await db.price_settings.find({}, {"_id": 0}).to_list(100)
     return settings
 
 @api_router.post("/price-settings")
-async def create_price_setting(setting: PriceSetting):
+async def create_or_update_price_setting(setting: PriceSetting):
     setting_dict = setting.model_dump()
-    await db.price_settings.insert_one(setting_dict)
-    return setting
-
-@api_router.put("/price-settings/{litre_size}")
-async def update_price_setting(litre_size: int, setting: PriceSetting):
+    setting_dict['updated_at'] = datetime.now(timezone.utc).isoformat()
+    
     await db.price_settings.update_one(
-        {"litre_size": litre_size},
-        {"$set": setting.model_dump()},
+        {"litre_size": setting.litre_size},
+        {"$set": setting_dict},
         upsert=True
     )
-    updated_setting = await db.price_settings.find_one({"litre_size": litre_size}, {"_id": 0})
-    return updated_setting
+    
+    return {"success": True, "message": "Price setting updated"}
 
 @api_router.get("/delivery-shifts")
-async def get_delivery_shifts(date_filter: Optional[str] = None):
-    query = {"is_active": True}
-    if date_filter:
-        query["date"] = date_filter
-    else:
-        today = date.today().isoformat()
-        query["date"] = today
+async def get_delivery_shifts(date_param: Optional[str] = Query(None)):
+    if not date_param:
+        date_param = date.today().isoformat()
     
-    shifts = await db.delivery_shifts.find(query, {"_id": 0}).to_list(100)
+    shifts = await db.delivery_shifts.find({"date": date_param}, {"_id": 0}).to_list(100)
     return shifts
 
 @api_router.post("/delivery-shifts")
-async def create_delivery_shift(shift: DeliveryShift):
+async def create_or_update_shift(shift: DeliveryShift):
     shift_dict = shift.model_dump()
-    await db.delivery_shifts.insert_one(shift_dict)
-    return shift
+    shift_dict['updated_at'] = datetime.now(timezone.utc).isoformat()
+    
+    await db.delivery_shifts.update_one(
+        {"date": shift.date, "staff_id": shift.staff_id},
+        {"$set": shift_dict},
+        upsert=True
+    )
+    
+    return {"success": True, "message": "Shift updated"}
 
 @api_router.delete("/delivery-shifts/{staff_id}/{date}/{shift}")
 async def delete_delivery_shift(staff_id: str, date: str, shift: str):
