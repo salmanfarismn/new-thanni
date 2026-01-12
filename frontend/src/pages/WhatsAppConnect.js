@@ -219,11 +219,11 @@ export default function WhatsAppConnect() {
                 <CheckCircle className="text-white" size={24} />
               </div>
               <div className="flex-1">
-                <h2 className="text-xl font-semibold text-emerald-900 mb-2">WhatsApp Connected!</h2>
-                <p className="text-emerald-700">Your WhatsApp is connected and ready to receive orders.</p>
+                <h2 className="text-xl font-semibold text-emerald-900 mb-2">WhatsApp Automation Active!</h2>
+                <p className="text-emerald-700">Your WhatsApp is connected. Customer orders are being automated. You can continue using WhatsApp normally on your phone.</p>
                 {status.user && (
-                  <div className="mt-3 text-sm text-emerald-600">
-                    Connected as: {status.user.name || status.user.id}
+                  <div className="mt-3 text-sm text-emerald-600 font-semibold">
+                    Connected Number: {status.user.name || status.user.id}
                   </div>
                 )}
               </div>
