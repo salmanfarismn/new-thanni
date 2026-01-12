@@ -1,12 +1,14 @@
 import { useState, useEffect } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import axios from 'axios';
-import { Droplets, Package, TruckIcon, IndianRupee, Users, Calendar, Settings, MessageSquare } from 'lucide-react';
+import { Droplets, Package, TruckIcon, IndianRupee, Users, Calendar, Settings as SettingsIcon, MessageSquare, Clock } from 'lucide-react';
 import '@/App.css';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
 import Stock from './pages/Stock';
 import WhatsAppConnect from './pages/WhatsAppConnect';
+import Settings from './pages/Settings';
+import Shifts from './pages/Shifts';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
