@@ -111,7 +111,7 @@ async def get_next_delivery_staff():
 
 async def get_today_stock():
     today = date.today().isoformat()
-    stock = await db.stock.find_one({"date": today})
+    stock = await db.stock.find_one({"date": today}, {"_id": 0})
     if not stock:
         stock = {
             "date": today,
