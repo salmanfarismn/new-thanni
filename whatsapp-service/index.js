@@ -122,6 +122,85 @@ app.get('/status', (req, res) => {
     });
 });
 
+app.post('/disconnect', async (req, res) => {
+    try {
+        console.log('Disconnect request received');
+        
+        if (sock) {
+            // Send logout command to WhatsApp
+            try {
+                await sock.logout();
+                console.log('WhatsApp logout successful');
+            } catch (logoutError) {
+                console.error('Error during logout:', logoutError);
+            }
+            
+            // Close the socket connection
+            sock.end();
+            sock = null;
+        }
+        
+        isConnected = false;
+        qrCode = null;
+        
+        // Delete auth_info folder
+        const fs = require('fs');
+        const path = require('path');
+        const authPath = path.join(__dirname, 'auth_info');
+        
+        if (fs.existsSync(authPath)) {
+            fs.rmSync(authPath, { recursive: true, force: true });
+            console.log('Auth info deleted');
+        }
+        
+        console.log('WhatsApp disconnected successfully');
+        res.json({ 
+            success: true, 
+            message: 'WhatsApp disconnected successfully. You can now log back into WhatsApp mobile safely.' 
+        });
+        
+    } catch (error) {
+        console.error('Error disconnecting WhatsApp:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
+app.post('/reconnect', async (req, res) => {
+    try {
+        console.log('Reconnect request received');
+        
+        // Clean up existing connection
+        if (sock) {
+            sock.end();
+            sock = null;
+        }
+        
+        isConnected = false;
+        qrCode = null;
+        
+        // Reinitialize WhatsApp
+        await initWhatsApp();
+        
+        // Wait for QR code to be generated
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        
+        res.json({ 
+            success: true, 
+            message: 'Reconnection initiated. Please scan the QR code.' 
+        });
+        
+    } catch (error) {
+        console.error('Error reconnecting WhatsApp:', error);
+        res.status(500).json({ 
+            success: false, 
+            error: error.message 
+        });
+    }
+});
+
 const PORT = process.env.PORT || 3001;
 app.listen(PORT, () => {
     console.log(`WhatsApp service running on port ${PORT}`);
