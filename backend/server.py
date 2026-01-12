@@ -54,13 +54,16 @@ class Order(BaseModel):
     customer_phone: str
     customer_name: str
     customer_address: str
+    litre_size: int
     quantity: int
+    price_per_can: float
     status: str
     delivery_staff_id: Optional[str] = None
     delivery_staff_name: Optional[str] = None
     payment_status: str
     payment_method: Optional[str] = None
     amount: float
+    shift_assigned: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     delivered_at: Optional[datetime] = None
 
