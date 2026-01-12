@@ -132,17 +132,42 @@ async def init_database():
         print("ℹ️  Today's stock already exists in database")
     
     # Create indexes for better performance
-    await db.customers.create_index("phone_number", unique=True)
-    await db.orders.create_index("order_id", unique=True)
+    try:
+        await db.customers.create_index("phone_number", unique=True)
+    except Exception:
+        pass  # Index might already exist
+    
+    try:
+        await db.orders.create_index("order_id", unique=True)
+    except Exception:
+        pass
+    
     await db.orders.create_index("customer_phone")
     await db.orders.create_index("delivery_staff_id")
     await db.orders.create_index("created_at")
-    await db.delivery_staff.create_index("staff_id", unique=True)
-    await db.delivery_staff.create_index("phone_number", unique=True)
+    
+    try:
+        await db.delivery_staff.create_index("staff_id", unique=True)
+    except Exception:
+        pass
+    
+    try:
+        await db.delivery_staff.create_index("phone_number", unique=True)
+    except Exception:
+        pass
+    
     await db.price_settings.create_index([("litre_size", 1), ("is_active", 1)])
     await db.delivery_shifts.create_index([("date", 1), ("staff_id", 1), ("shift", 1)])
-    await db.stock.create_index("date", unique=True)
-    await db.customer_sessions.create_index("phone_number", unique=True)
+    
+    try:
+        await db.stock.create_index("date", unique=True)
+    except Exception:
+        pass
+    
+    try:
+        await db.customer_sessions.create_index("phone_number", unique=True)
+    except Exception:
+        pass
     
     print("✅ Database indexes created successfully!")
     
