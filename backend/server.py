@@ -22,7 +22,20 @@ app = FastAPI()
 api_router = APIRouter(prefix="/api")
 
 WHATSAPP_SERVICE_URL = os.environ.get('WHATSAPP_SERVICE_URL', 'http://localhost:3001')
-PRICE_PER_CAN = 50
+
+class PriceSetting(BaseModel):
+    litre_size: int
+    price_per_can: float
+    is_active: bool = True
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class DeliveryShift(BaseModel):
+    date: str
+    staff_id: str
+    staff_name: str
+    shift: str
+    is_active: bool = True
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class Customer(BaseModel):
     phone_number: str
