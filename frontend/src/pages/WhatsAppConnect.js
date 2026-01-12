@@ -174,6 +174,24 @@ export default function WhatsAppConnect() {
         <p className="text-slate-600 mt-1">Connect your WhatsApp for order management</p>
       </div>
 
+      {/* Safety Warning Banner */}
+      <div className="bg-sky-50 border-2 border-sky-200 rounded-xl p-5" data-testid="safety-banner">
+        <div className="flex items-start gap-3">
+          <CheckCircle className="text-sky-600 flex-shrink-0 mt-0.5" size={24} />
+          <div>
+            <h3 className="font-bold text-sky-900 mb-2">✓ Safe for Your Personal WhatsApp</h3>
+            <div className="text-sm text-sky-800 space-y-1">
+              <p className="font-semibold">This connection is SAFE:</p>
+              <p>• You can continue using WhatsApp normally on your phone</p>
+              <p>• Your personal chats remain private and untouched</p>
+              <p>• The system only automates customer order messages</p>
+              <p>• You can disconnect anytime without losing WhatsApp access</p>
+              <p>• Works like WhatsApp Web - your phone stays connected</p>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Warning Banner */}
       <div className="bg-amber-50 border-2 border-amber-200 rounded-xl p-5" data-testid="warning-banner">
         <div className="flex items-start gap-3">
