@@ -199,8 +199,13 @@ async def handle_whatsapp_message(message_data: IncomingMessage):
             else:
                 stock = await get_today_stock()
                 if stock['available_stock'] > 0:
+                    await db.customer_sessions.update_one(
+                        {"phone_number": phone_number},
+                        {"$set": {"step": "awaiting_litre", "updated_at": datetime.now(timezone.utc).isoformat()}},
+                        upsert=True
+                    )
                     return MessageResponse(
-                        reply=f"Hello {customer['name']}! 💧\n\nHow many water cans do you need?\n\nReply with:\n1 - One can\n2 - Two cans\n3 - Three cans\n\nAvailable today: {stock['available_stock']} cans"
+                        reply=f"Hello {customer['name']}! 💧\n\nWhich size water can do you need?\n\nReply with:\n*20* - 20 Litre can\n*25* - 25 Litre can\n\nAvailable stock: {stock['available_stock']} cans"
                     )
                 else:
                     return MessageResponse(
@@ -229,8 +234,42 @@ async def handle_whatsapp_message(message_data: IncomingMessage):
                 reply="Perfect! Now you can order water cans. Send 'order' to start."
             )
 
+        elif message_text in ['20', '25']:
+            session = await db.customer_sessions.find_one({"phone_number": phone_number})
+            
+            if not session or session.get('step') != 'awaiting_litre':
+                return MessageResponse(
+                    reply="Please start your order by sending 'hi' or 'order'."
+                )
+            
+            litre_size = int(message_text)
+            price = await get_price_for_litre(litre_size)
+            
+            await db.customer_sessions.update_one(
+                {"phone_number": phone_number},
+                {"$set": {
+                    "step": "awaiting_quantity",
+                    "litre_size": litre_size,
+                    "price_per_can": price,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }}
+            )
+            
+            stock = await get_today_stock()
+            return MessageResponse(
+                reply=f"Great! {litre_size}L water can selected.\n\nPrice: ₹{price} per can\n\nHow many cans do you need?\n\nReply with quantity (1-10)\n\nAvailable: {stock['available_stock']} cans"
+            )
+
         elif message_text.isdigit():
             quantity = int(message_text)
+            
+            session = await db.customer_sessions.find_one({"phone_number": phone_number})
+            
+            if not session or session.get('step') != 'awaiting_quantity':
+                return MessageResponse(
+                    reply="Please start your order by sending 'hi' or 'order'."
+                )
+            
             if quantity < 1 or quantity > 10:
                 return MessageResponse(
                     reply="Please enter a valid quantity (1-10 cans)."
@@ -248,11 +287,15 @@ async def handle_whatsapp_message(message_data: IncomingMessage):
                     reply=f"Sorry! Only {stock['available_stock']} cans available today.\n\nPlease order less or try tomorrow."
                 )
 
-            staff = await get_next_delivery_staff()
+            staff, shift = await get_active_delivery_staff_for_shift()
             if not staff:
                 return MessageResponse(
-                    reply="Sorry! No delivery staff available. Please try later."
+                    reply="Sorry! No delivery staff available for this time. Please try later or contact us."
                 )
+
+            litre_size = session.get('litre_size')
+            price_per_can = session.get('price_per_can')
+            total_amount = quantity * price_per_can
 
             order_id = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}"
             order_data = {
@@ -260,13 +303,16 @@ async def handle_whatsapp_message(message_data: IncomingMessage):
                 "customer_phone": phone_number,
                 "customer_name": customer['name'],
                 "customer_address": customer['address'],
+                "litre_size": litre_size,
                 "quantity": quantity,
+                "price_per_can": price_per_can,
                 "status": "pending",
                 "delivery_staff_id": staff['staff_id'],
                 "delivery_staff_name": staff['name'],
                 "payment_status": "pending",
                 "payment_method": None,
-                "amount": quantity * PRICE_PER_CAN,
+                "amount": total_amount,
+                "shift_assigned": shift,
                 "created_at": datetime.now(timezone.utc).isoformat(),
                 "delivered_at": None
             }
@@ -285,18 +331,78 @@ async def handle_whatsapp_message(message_data: IncomingMessage):
                 {"$inc": {"active_orders_count": 1}}
             )
 
+            await db.customer_sessions.delete_one({"phone_number": phone_number})
+
             await send_whatsapp_message(
                 staff['phone_number'],
-                f"🚚 New Delivery Assignment\n\nOrder ID: {order_id}\nCustomer: {customer['name']}\nAddress: {customer['address']}\nQuantity: {quantity} cans\nAmount: ₹{quantity * PRICE_PER_CAN}\n\nPlease deliver ASAP!"
+                f"🚚 New Delivery Assignment\n\n*Order ID:* {order_id}\n*Shift:* {shift.upper()}\n*Customer:* {customer['name']}\n*Address:* {customer['address']}\n*Can Size:* {litre_size}L\n*Quantity:* {quantity} cans\n*Amount:* ₹{total_amount}\n\nPlease deliver ASAP!\n\nReply:\n*DELIVERED* - Mark as delivered\n*PAID CASH* - Delivered & paid (cash)\n*PAID UPI* - Delivered & paid (UPI)"
             )
 
             return MessageResponse(
-                reply=f"✅ Order Confirmed!\n\nOrder ID: {order_id}\nQuantity: {quantity} cans\nAmount: ₹{quantity * PRICE_PER_CAN}\nDelivery Staff: {staff['name']}\n\nYour water will be delivered soon! 💧"
+                reply=f"✅ Order Confirmed!\n\n*Order ID:* {order_id}\n*Can Size:* {litre_size} Litre\n*Quantity:* {quantity} cans\n*Price per can:* ₹{price_per_can}\n*Total Amount:* ₹{total_amount}\n*Delivery Staff:* {staff['name']}\n*Shift:* {shift.capitalize()}\n\nYour water will be delivered soon! 💧"
             )
+
+        elif message_text.startswith('delivered') or message_text.startswith('paid'):
+            delivery_person = await db.delivery_staff.find_one({"phone_number": phone_number})
+            
+            if not delivery_person:
+                return MessageResponse(
+                    reply="You are not authorized to update delivery status."
+                )
+            
+            pending_orders = await db.orders.find({
+                "delivery_staff_id": delivery_person['staff_id'],
+                "status": {"$in": ["pending", "delivered"]}
+            }).sort("created_at", -1).limit(1).to_list(1)
+            
+            if not pending_orders:
+                return MessageResponse(
+                    reply="No pending orders found for you."
+                )
+            
+            order = pending_orders[0]
+            update_data = {}
+            
+            if 'paid cash' in message_text:
+                update_data = {
+                    "status": "delivered",
+                    "payment_status": "paid",
+                    "payment_method": "cash",
+                    "delivered_at": datetime.now(timezone.utc).isoformat()
+                }
+                reply_msg = f"✅ Order {order['order_id']} marked as DELIVERED & PAID (Cash)!\n\nAmount collected: ₹{order['amount']}"
+            elif 'paid upi' in message_text:
+                update_data = {
+                    "status": "delivered",
+                    "payment_status": "paid",
+                    "payment_method": "upi",
+                    "delivered_at": datetime.now(timezone.utc).isoformat()
+                }
+                reply_msg = f"✅ Order {order['order_id']} marked as DELIVERED & PAID (UPI)!\n\nAmount collected: ₹{order['amount']}"
+            elif 'delivered' in message_text:
+                update_data = {
+                    "status": "delivered",
+                    "delivered_at": datetime.now(timezone.utc).isoformat()
+                }
+                reply_msg = f"✅ Order {order['order_id']} marked as DELIVERED!\n\nRemember to collect ₹{order['amount']} from customer."
+            
+            if update_data:
+                await db.orders.update_one(
+                    {"order_id": order['order_id']},
+                    {"$set": update_data}
+                )
+                
+                if update_data.get('status') == 'delivered' and order.get('status') == 'pending':
+                    await db.delivery_staff.update_one(
+                        {"staff_id": delivery_person['staff_id']},
+                        {"$inc": {"active_orders_count": -1}}
+                    )
+                
+                return MessageResponse(reply=reply_msg)
 
         else:
             return MessageResponse(
-                reply="I didn't understand that. 😅\n\nSend 'hi' to place an order!"
+                reply="I didn't understand that. 😕\n\nSend 'hi' to place an order!\n\nDelivery staff: Send 'DELIVERED', 'PAID CASH', or 'PAID UPI' to update order status."
             )
 
     except Exception as e:
