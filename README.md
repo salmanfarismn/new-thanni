@@ -64,8 +64,15 @@ The WhatsApp service is running on `localhost:3001`
 To connect WhatsApp:
 1. Open the dashboard
 2. Go to "WhatsApp" tab
-3. Scan the QR code with your WhatsApp mobile app
-4. WhatsApp → Settings → Linked Devices → Link a Device
+3. **IMPORTANT: Use a dedicated test number, NOT your personal WhatsApp**
+4. Scan the QR code with your WhatsApp mobile app
+5. WhatsApp → Settings → Linked Devices → Link a Device
+
+To disconnect WhatsApp safely:
+1. Go to "WhatsApp" tab
+2. Click "Disconnect WhatsApp" button
+3. Confirm the action
+4. Your session will be cleared and you can log back into WhatsApp mobile safely
 
 ## Customer Order Flow
 
