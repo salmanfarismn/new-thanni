@@ -84,6 +84,25 @@ export default function Settings() {
       </div>
 
       <Link 
+        to="/whatsapp"
+        className="block bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all"
+        data-testid="whatsapp-link"
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm">
+              <MessageSquare className="text-white" size={28} />
+            </div>
+            <div>
+              <div className="text-xl font-bold mb-1">WhatsApp Integration</div>
+              <div className="text-emerald-100">Connect your WhatsApp for automated orders</div>
+            </div>
+          </div>
+          <ArrowRight className="text-white" size={24} />
+        </div>
+      </Link>
+
+      <Link 
         to="/shifts"
         className="block bg-gradient-to-r from-sky-500 to-blue-600 text-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all"
         data-testid="shifts-link"
