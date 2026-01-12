@@ -573,6 +573,56 @@ async def reconnect_whatsapp():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reconnect WhatsApp: {str(e)}")
 
+@api_router.get("/price-settings")
+async def get_price_settings():
+    settings = await db.price_settings.find({"is_active": True}, {"_id": 0}).to_list(100)
+    return settings
+
+@api_router.post("/price-settings")
+async def create_price_setting(setting: PriceSetting):
+    setting_dict = setting.model_dump()
+    await db.price_settings.insert_one(setting_dict)
+    return setting
+
+@api_router.put("/price-settings/{litre_size}")
+async def update_price_setting(litre_size: int, setting: PriceSetting):
+    await db.price_settings.update_one(
+        {"litre_size": litre_size},
+        {"$set": setting.model_dump()},
+        upsert=True
+    )
+    updated_setting = await db.price_settings.find_one({"litre_size": litre_size}, {"_id": 0})
+    return updated_setting
+
+@api_router.get("/delivery-shifts")
+async def get_delivery_shifts(date_filter: Optional[str] = None):
+    query = {"is_active": True}
+    if date_filter:
+        query["date"] = date_filter
+    else:
+        today = date.today().isoformat()
+        query["date"] = today
+    
+    shifts = await db.delivery_shifts.find(query, {"_id": 0}).to_list(100)
+    return shifts
+
+@api_router.post("/delivery-shifts")
+async def create_delivery_shift(shift: DeliveryShift):
+    shift_dict = shift.model_dump()
+    await db.delivery_shifts.insert_one(shift_dict)
+    return shift
+
+@api_router.delete("/delivery-shifts/{staff_id}/{date}/{shift}")
+async def delete_delivery_shift(staff_id: str, date: str, shift: str):
+    result = await db.delivery_shifts.delete_one({
+        "staff_id": staff_id,
+        "date": date,
+        "shift": shift
+    })
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Delivery shift not found")
+    return {"message": "Delivery shift deleted successfully"}
+
 app.include_router(api_router)
 
 app.add_middleware(
