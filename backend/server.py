@@ -560,8 +560,6 @@ async def handle_whatsapp_message_legacy(message_data: IncomingMessage):
             success=False
         )
 
-# Removed duplicate functions
-
 @api_router.get("/dashboard/metrics")
 async def get_dashboard_metrics():
     today = date.today().isoformat()
