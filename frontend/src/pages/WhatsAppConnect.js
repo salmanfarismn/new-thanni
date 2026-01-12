@@ -11,6 +11,8 @@ export default function WhatsAppConnect() {
   const [showDisconnectModal, setShowDisconnectModal] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
   const [reconnecting, setReconnecting] = useState(false);
+  const [testPhone, setTestPhone] = useState('');
+  const [sendingTest, setSendingTest] = useState(false);
 
   useEffect(() => {
     checkStatus();
