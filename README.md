@@ -180,6 +180,8 @@ To disconnect WhatsApp safely:
 - `POST /api/whatsapp/message` - Handle incoming WhatsApp messages
 - `GET /api/whatsapp/qr` - Get QR code for connection
 - `GET /api/whatsapp/status` - Check WhatsApp connection status
+- `POST /api/whatsapp/disconnect` - Safely disconnect WhatsApp session
+- `POST /api/whatsapp/reconnect` - Reconnect WhatsApp (generates new QR)
 
 ### Dashboard
 - `GET /api/dashboard/metrics` - Get today's metrics
