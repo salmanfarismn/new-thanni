@@ -508,7 +508,6 @@ async def update_stock(stock_update: StockUpdateRequest):
     today = date.today().isoformat()
     stock = await get_today_stock()
     
-    current_orders = stock['orders_count']
     used_stock = stock['total_stock'] - stock['available_stock']
     new_available = stock_update.total_stock - used_stock
     
