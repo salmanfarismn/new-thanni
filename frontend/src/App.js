@@ -24,7 +24,7 @@ function BottomNav() {
     { path: '/', icon: Package, label: 'Dashboard' },
     { path: '/orders', icon: TruckIcon, label: 'Orders' },
     { path: '/stock', icon: Droplets, label: 'Stock' },
-    { path: '/whatsapp', icon: MessageSquare, label: 'WhatsApp' },
+    { path: '/settings', icon: SettingsIcon, label: 'Settings' },
   ];
 
   return (
@@ -61,7 +61,7 @@ function Sidebar() {
     { path: '/', icon: Package, label: 'Dashboard' },
     { path: '/orders', icon: TruckIcon, label: 'Orders' },
     { path: '/stock', icon: Droplets, label: 'Stock' },
-    { path: '/whatsapp', icon: MessageSquare, label: 'WhatsApp' },
+    { path: '/settings', icon: SettingsIcon, label: 'Settings' },
   ];
 
   return (
