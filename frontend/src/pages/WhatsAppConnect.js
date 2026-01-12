@@ -338,12 +338,40 @@ export default function WhatsAppConnect() {
           <div className="bg-sky-50 border border-sky-200 rounded-xl p-5">
             <div className="flex items-start gap-3">
               <Smartphone className="text-sky-600 flex-shrink-0 mt-1" size={20} />
-              <div>
+              <div className="flex-1">
                 <h3 className="font-semibold text-sky-900 mb-1">Test Your Setup</h3>
-                <p className="text-sm text-sky-800 mb-2">Send a WhatsApp message to your connected number to test the bot!</p>
-                <div className="text-sm text-sky-700 bg-white rounded-lg p-3 font-mono">
-                  Message: "Hi"
+                <p className="text-sm text-sky-800 mb-3">Send a test message to verify automation is working</p>
+                <div className="flex gap-2">
+                  <input
+                    type="tel"
+                    placeholder="Enter phone number (e.g., 919876543210)"
+                    value={testPhone}
+                    onChange={(e) => setTestPhone(e.target.value)}
+                    data-testid="test-phone-input"
+                    className="flex-1 px-3 py-2 border border-sky-200 rounded-lg focus:ring-2 focus:ring-sky-100 focus:border-sky-400 text-sm"
+                  />
+                  <button
+                    onClick={handleSendTestMessage}
+                    disabled={sendingTest || !testPhone}
+                    data-testid="send-test-btn"
+                    className="px-4 py-2 bg-sky-600 text-white rounded-lg font-semibold hover:bg-sky-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                  >
+                    {sendingTest ? (
+                      <>
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        Sending...
+                      </>
+                    ) : (
+                      <>
+                        <Send size={16} />
+                        Test
+                      </>
+                    )}
+                  </button>
                 </div>
+                <p className="text-xs text-sky-700 mt-2">
+                  Enter your WhatsApp number to receive a test welcome message
+                </p>
               </div>
             </div>
           </div>
