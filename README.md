@@ -216,6 +216,40 @@ WHATSAPP_SERVICE_URL=http://localhost:3001
 REACT_APP_BACKEND_URL=https://your-domain.com
 ```
 
+## Safety & Security
+
+### WhatsApp Integration Safety
+
+**⚠️ CRITICAL: DO NOT use personal WhatsApp numbers**
+
+- Always use a dedicated test number or business line
+- Personal numbers may get flagged or banned by WhatsApp
+- You can safely disconnect at any time
+
+### Disconnect Process
+
+When you disconnect WhatsApp:
+1. All WhatsApp messaging stops immediately
+2. Session credentials are deleted from the server
+3. `auth_info` folder is removed
+4. You can safely log back into WhatsApp on your mobile device
+5. No messages will be processed after disconnect
+6. You can reconnect later with the same or different number
+
+### Reconnect Process
+
+To reconnect:
+1. Click "Reconnect" button
+2. A new QR code will be generated
+3. Scan with WhatsApp mobile app
+4. Old session data is not reused
+
+### Test vs Production
+
+- **Test Mode**: Use a separate test phone number
+- **Production Mode**: Use a dedicated business line
+- Never mix personal and business WhatsApp accounts
+
 ## Business Rules
 
 1. **Stock Management**
