@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter
+from fastapi import FastAPI, APIRouter, HTTPException, Query
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -6,67 +6,388 @@ import os
 import logging
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
-from typing import List
+from typing import List, Optional
 import uuid
-from datetime import datetime, timezone
-
+from datetime import datetime, timezone, date
+import httpx
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
-# MongoDB connection
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-# Create the main app without a prefix
 app = FastAPI()
-
-# Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+WHATSAPP_SERVICE_URL = os.environ.get('WHATSAPP_SERVICE_URL', 'http://localhost:3001')
+PRICE_PER_CAN = 50
 
-# Define Models
-class StatusCheck(BaseModel):
-    model_config = ConfigDict(extra="ignore")  # Ignore MongoDB's _id field
+class Customer(BaseModel):
+    phone_number: str
+    name: str
+    address: str
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class DeliveryStaff(BaseModel):
+    staff_id: str
+    name: str
+    phone_number: str
+    active_orders_count: int = 0
+
+class Order(BaseModel):
+    order_id: str
+    customer_phone: str
+    customer_name: str
+    customer_address: str
+    quantity: int
+    status: str
+    delivery_staff_id: Optional[str] = None
+    delivery_staff_name: Optional[str] = None
+    payment_status: str
+    payment_method: Optional[str] = None
+    amount: float
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    delivered_at: Optional[datetime] = None
+
+class Stock(BaseModel):
+    date: str
+    total_stock: int
+    available_stock: int
+    orders_count: int
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+class IncomingMessage(BaseModel):
+    phone_number: str
+    message: str
+    message_id: str
+    timestamp: int
+
+class MessageResponse(BaseModel):
+    reply: Optional[str] = None
+    success: bool = True
+
+class StockUpdateRequest(BaseModel):
+    total_stock: int
+
+class DeliveryUpdate(BaseModel):
+    order_id: str
+    status: str
+    payment_status: Optional[str] = None
+    payment_method: Optional[str] = None
+
+async def send_whatsapp_message(phone_number: str, message: str):
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                f"{WHATSAPP_SERVICE_URL}/send",
+                json={"phone_number": phone_number, "message": message},
+                timeout=10.0
+            )
+            return response.json()
+    except Exception as e:
+        logging.error(f"Failed to send WhatsApp message: {e}")
+        return {"success": False, "error": str(e)}
+
+async def get_or_create_customer(phone_number: str, name: str = None, address: str = None):
+    customer = await db.customers.find_one({"phone_number": phone_number})
+    if not customer:
+        customer_data = {
+            "phone_number": phone_number,
+            "name": name or "Customer",
+            "address": address or "Not provided",
+            "created_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.customers.insert_one(customer_data)
+        return customer_data
+    return customer
+
+async def get_next_delivery_staff():
+    staff = await db.delivery_staff.find().sort("active_orders_count", 1).limit(1).to_list(1)
+    if staff:
+        return staff[0]
+    return None
+
+async def get_today_stock():
+    today = date.today().isoformat()
+    stock = await db.stock.find_one({"date": today})
+    if not stock:
+        stock = {
+            "date": today,
+            "total_stock": 50,
+            "available_stock": 50,
+            "orders_count": 0,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }
+        await db.stock.insert_one(stock)
+    return stock
+
+@api_router.post("/whatsapp/message", response_model=MessageResponse)
+async def handle_whatsapp_message(message_data: IncomingMessage):
+    try:
+        phone_number = message_data.phone_number
+        message_text = message_data.message.strip().lower()
+
+        if any(word in message_text for word in ['hi', 'hello', 'water', 'order']):
+            customer = await get_or_create_customer(phone_number)
+            if customer.get('name') == 'Customer' or customer.get('address') == 'Not provided':
+                return MessageResponse(
+                    reply="Welcome to HydroFlow! 💧\n\nTo place an order, please share:\n1. Your Name\n2. Your Address\n\nExample: My name is John, address is 123 Main St"
+                )
+            else:
+                stock = await get_today_stock()
+                if stock['available_stock'] > 0:
+                    return MessageResponse(
+                        reply=f"Hello {customer['name']}! 💧\n\nHow many water cans do you need?\n\nReply with:\n1 - One can\n2 - Two cans\n3 - Three cans\n\nAvailable today: {stock['available_stock']} cans"
+                    )
+                else:
+                    return MessageResponse(
+                        reply="Sorry! We're out of stock for today. 😔\n\nPlease try again tomorrow!"
+                    )
+
+        elif message_text.startswith('name:') or message_text.startswith('my name'):
+            parts = message_text.replace('name:', '').replace('my name is', '').replace(',', ' ').split()
+            name = ' '.join(parts[:3])
+            await db.customers.update_one(
+                {"phone_number": phone_number},
+                {"$set": {"name": name.strip()}},
+                upsert=True
+            )
+            return MessageResponse(
+                reply=f"Thanks {name}! Now please share your delivery address."
+            )
+
+        elif message_text.startswith('address:') or 'address' in message_text.lower():
+            address = message_text.replace('address:', '').strip()
+            await db.customers.update_one(
+                {"phone_number": phone_number},
+                {"$set": {"address": address}}
+            )
+            return MessageResponse(
+                reply="Perfect! Now you can order water cans. Send 'order' to start."
+            )
+
+        elif message_text.isdigit():
+            quantity = int(message_text)
+            if quantity < 1 or quantity > 10:
+                return MessageResponse(
+                    reply="Please enter a valid quantity (1-10 cans)."
+                )
+
+            customer = await db.customers.find_one({"phone_number": phone_number})
+            if not customer or customer.get('name') == 'Customer':
+                return MessageResponse(
+                    reply="Please share your name and address first. Send 'hi' to start."
+                )
+
+            stock = await get_today_stock()
+            if stock['available_stock'] < quantity:
+                return MessageResponse(
+                    reply=f"Sorry! Only {stock['available_stock']} cans available today.\n\nPlease order less or try tomorrow."
+                )
+
+            staff = await get_next_delivery_staff()
+            if not staff:
+                return MessageResponse(
+                    reply="Sorry! No delivery staff available. Please try later."
+                )
+
+            order_id = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}"
+            order_data = {
+                "order_id": order_id,
+                "customer_phone": phone_number,
+                "customer_name": customer['name'],
+                "customer_address": customer['address'],
+                "quantity": quantity,
+                "status": "pending",
+                "delivery_staff_id": staff['staff_id'],
+                "delivery_staff_name": staff['name'],
+                "payment_status": "pending",
+                "payment_method": None,
+                "amount": quantity * PRICE_PER_CAN,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "delivered_at": None
+            }
+            await db.orders.insert_one(order_data)
+
+            await db.stock.update_one(
+                {"date": stock['date']},
+                {
+                    "$inc": {"available_stock": -quantity, "orders_count": 1},
+                    "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
+                }
+            )
+
+            await db.delivery_staff.update_one(
+                {"staff_id": staff['staff_id']},
+                {"$inc": {"active_orders_count": 1}}
+            )
+
+            await send_whatsapp_message(
+                staff['phone_number'],
+                f"🚚 New Delivery Assignment\n\nOrder ID: {order_id}\nCustomer: {customer['name']}\nAddress: {customer['address']}\nQuantity: {quantity} cans\nAmount: ₹{quantity * PRICE_PER_CAN}\n\nPlease deliver ASAP!"
+            )
+
+            return MessageResponse(
+                reply=f"✅ Order Confirmed!\n\nOrder ID: {order_id}\nQuantity: {quantity} cans\nAmount: ₹{quantity * PRICE_PER_CAN}\nDelivery Staff: {staff['name']}\n\nYour water will be delivered soon! 💧"
+            )
+
+        else:
+            return MessageResponse(
+                reply="I didn't understand that. 😅\n\nSend 'hi' to place an order!"
+            )
+
+    except Exception as e:
+        logging.error(f"Error processing message: {e}")
+        return MessageResponse(
+            reply="Sorry, something went wrong. Please try again.",
+            success=False
+        )
+
+@api_router.get("/dashboard/metrics")
+async def get_dashboard_metrics():
+    today = date.today().isoformat()
     
-    id: str = Field(default_factory=lambda: str(uuid.uuid4()))
-    client_name: str
-    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-
-class StatusCheckCreate(BaseModel):
-    client_name: str
-
-# Add your routes to the router instead of directly to app
-@api_router.get("/")
-async def root():
-    return {"message": "Hello World"}
-
-@api_router.post("/status", response_model=StatusCheck)
-async def create_status_check(input: StatusCheckCreate):
-    status_dict = input.model_dump()
-    status_obj = StatusCheck(**status_dict)
+    stock = await get_today_stock()
     
-    # Convert to dict and serialize datetime to ISO string for MongoDB
-    doc = status_obj.model_dump()
-    doc['timestamp'] = doc['timestamp'].isoformat()
+    orders = await db.orders.find({"created_at": {"$regex": f"^{today}"}}).to_list(1000)
     
-    _ = await db.status_checks.insert_one(doc)
-    return status_obj
+    total_orders = len(orders)
+    delivered_orders = len([o for o in orders if o['status'] == 'delivered'])
+    pending_orders = len([o for o in orders if o['status'] == 'pending'])
+    
+    total_cans = sum(o['quantity'] for o in orders)
+    delivered_cans = sum(o['quantity'] for o in orders if o['status'] == 'delivered')
+    
+    paid_orders = [o for o in orders if o['payment_status'] == 'paid']
+    total_revenue = sum(o['amount'] for o in paid_orders)
+    pending_payment = sum(o['amount'] for o in orders if o['payment_status'] == 'pending')
+    
+    return {
+        "total_orders": total_orders,
+        "delivered_orders": delivered_orders,
+        "pending_orders": pending_orders,
+        "total_cans": total_cans,
+        "delivered_cans": delivered_cans,
+        "total_revenue": total_revenue,
+        "pending_payment": pending_payment,
+        "available_stock": stock['available_stock'],
+        "total_stock": stock['total_stock']
+    }
 
-@api_router.get("/status", response_model=List[StatusCheck])
-async def get_status_checks():
-    # Exclude MongoDB's _id field from the query results
-    status_checks = await db.status_checks.find({}, {"_id": 0}).to_list(1000)
+@api_router.get("/orders")
+async def get_orders(status: Optional[str] = None, staff_id: Optional[str] = None, date_filter: Optional[str] = None):
+    query = {}
+    if status:
+        query['status'] = status
+    if staff_id:
+        query['delivery_staff_id'] = staff_id
+    if date_filter:
+        query['created_at'] = {"$regex": f"^{date_filter}"}
+    else:
+        today = date.today().isoformat()
+        query['created_at'] = {"$regex": f"^{today}"}
     
-    # Convert ISO string timestamps back to datetime objects
-    for check in status_checks:
-        if isinstance(check['timestamp'], str):
-            check['timestamp'] = datetime.fromisoformat(check['timestamp'])
-    
-    return status_checks
+    orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    return orders
 
-# Include the router in the main app
+@api_router.get("/orders/{order_id}")
+async def get_order(order_id: str):
+    order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    return order
+
+@api_router.put("/orders/{order_id}/status")
+async def update_order_status(order_id: str, update: DeliveryUpdate):
+    order = await db.orders.find_one({"order_id": order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    update_data = {"status": update.status}
+    if update.status == 'delivered':
+        update_data['delivered_at'] = datetime.now(timezone.utc).isoformat()
+        
+        if order['status'] == 'pending':
+            await db.delivery_staff.update_one(
+                {"staff_id": order['delivery_staff_id']},
+                {"$inc": {"active_orders_count": -1}}
+            )
+    
+    if update.payment_status:
+        update_data['payment_status'] = update.payment_status
+    if update.payment_method:
+        update_data['payment_method'] = update.payment_method
+    
+    await db.orders.update_one({"order_id": order_id}, {"$set": update_data})
+    
+    updated_order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+    return updated_order
+
+@api_router.get("/stock")
+async def get_stock(date_param: Optional[str] = Query(None)):
+    if date_param:
+        stock = await db.stock.find_one({"date": date_param}, {"_id": 0})
+    else:
+        stock = await get_today_stock()
+    
+    if not stock:
+        raise HTTPException(status_code=404, detail="Stock data not found")
+    return stock
+
+@api_router.put("/stock")
+async def update_stock(stock_update: StockUpdateRequest):
+    today = date.today().isoformat()
+    stock = await get_today_stock()
+    
+    current_orders = stock['orders_count']
+    used_stock = stock['total_stock'] - stock['available_stock']
+    new_available = stock_update.total_stock - used_stock
+    
+    await db.stock.update_one(
+        {"date": today},
+        {
+            "$set": {
+                "total_stock": stock_update.total_stock,
+                "available_stock": max(0, new_available),
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+        }
+    )
+    
+    updated_stock = await db.stock.find_one({"date": today}, {"_id": 0})
+    return updated_stock
+
+@api_router.get("/delivery-staff")
+async def get_delivery_staff():
+    staff = await db.delivery_staff.find({}, {"_id": 0}).to_list(100)
+    return staff
+
+@api_router.post("/delivery-staff")
+async def create_delivery_staff(staff: DeliveryStaff):
+    staff_dict = staff.model_dump()
+    await db.delivery_staff.insert_one(staff_dict)
+    return staff
+
+@api_router.get("/whatsapp/qr")
+async def get_qr_code():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{WHATSAPP_SERVICE_URL}/qr", timeout=5.0)
+            return response.json()
+    except Exception as e:
+        return {"qr": None, "error": str(e)}
+
+@api_router.get("/whatsapp/status")
+async def get_whatsapp_status():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{WHATSAPP_SERVICE_URL}/status", timeout=5.0)
+            return response.json()
+    except Exception as e:
+        return {"connected": False, "error": str(e)}
+
 app.include_router(api_router)
 
 app.add_middleware(
@@ -77,7 +398,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
