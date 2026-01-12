@@ -770,6 +770,15 @@ async def reconnect_whatsapp():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reconnect WhatsApp: {str(e)}")
 
+@api_router.post("/whatsapp/send-test")
+async def send_test_message(phone: str, message: str = "Hello from HydroFlow! This is a test message."):
+    """Manually send a test message"""
+    try:
+        result = await send_whatsapp_message(phone, message)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to send test message: {str(e)}")
+
 @api_router.get("/price-settings")
 async def get_price_settings():
     settings = await db.price_settings.find({}, {"_id": 0}).to_list(100)
