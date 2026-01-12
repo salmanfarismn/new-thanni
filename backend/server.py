@@ -388,6 +388,24 @@ async def get_whatsapp_status():
     except Exception as e:
         return {"connected": False, "error": str(e)}
 
+@api_router.post("/whatsapp/disconnect")
+async def disconnect_whatsapp():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{WHATSAPP_SERVICE_URL}/disconnect", timeout=10.0)
+            return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to disconnect WhatsApp: {str(e)}")
+
+@api_router.post("/whatsapp/reconnect")
+async def reconnect_whatsapp():
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{WHATSAPP_SERVICE_URL}/reconnect", timeout=10.0)
+            return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reconnect WhatsApp: {str(e)}")
+
 app.include_router(api_router)
 
 app.add_middleware(
