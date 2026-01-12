@@ -109,9 +109,9 @@ export default function WhatsAppConnect() {
               <AlertTriangle className="text-red-600" size={24} />
             </div>
             <div>
-              <h2 className="text-xl font-bold text-slate-900 mb-2">Disconnect WhatsApp?</h2>
+              <h2 className="text-xl font-bold text-slate-900 mb-2">Disconnect WhatsApp Automation?</h2>
               <p className="text-slate-600 text-sm">
-                This will safely disconnect your WhatsApp account from the system. You will be able to log back into WhatsApp on your mobile device without any issues.
+                This will safely stop automation but keep your WhatsApp working normally. Customers won't be able to place automated orders until you reconnect.
               </p>
             </div>
           </div>
@@ -119,10 +119,12 @@ export default function WhatsAppConnect() {
           <div className="bg-sky-50 border border-sky-200 rounded-xl p-4 mb-6">
             <h3 className="font-semibold text-sky-900 text-sm mb-2">What happens after disconnect:</h3>
             <ul className="text-xs text-sky-800 space-y-1">
-              <li>✓ All WhatsApp messaging will stop</li>
-              <li>✓ Session credentials will be deleted</li>
-              <li>✓ You can safely log back into WhatsApp mobile</li>
-              <li>✓ You can reconnect later with the same or different number</li>
+              <li>✓ All automated customer order responses will stop</li>
+              <li>✓ Delivery boy notifications will stop</li>
+              <li>✓ Your WhatsApp continues working normally on your phone</li>
+              <li>✓ Your personal chats remain untouched</li>
+              <li>✓ Dashboard and order history stay intact</li>
+              <li>✓ You can reconnect anytime</li>
             </ul>
           </div>
 
