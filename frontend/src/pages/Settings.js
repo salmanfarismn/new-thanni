@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../App';
 import { Link } from 'react-router-dom';
-import { Settings as SettingsIcon, Save, Droplet, IndianRupee, Plus, Clock, ArrowRight } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Droplet, IndianRupee, Plus, Clock, ArrowRight, MessageSquare } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function Settings() {
