@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../App';
-import { MessageSquare, Smartphone, CheckCircle, QrCode, AlertCircle, AlertTriangle, LogOut, RefreshCw, XCircle } from 'lucide-react';
+import { MessageSquare, Smartphone, CheckCircle, QrCode, AlertCircle, AlertTriangle, LogOut, RefreshCw, XCircle, Send } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function WhatsAppConnect() {
