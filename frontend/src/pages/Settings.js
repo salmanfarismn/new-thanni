@@ -83,6 +83,25 @@ export default function Settings() {
         <p className="text-slate-600 mt-1">Manage pricing and configurations</p>
       </div>
 
+      <Link 
+        to="/shifts"
+        className="block bg-gradient-to-r from-sky-500 to-blue-600 text-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all"
+        data-testid="shifts-link"
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm">
+              <Clock className="text-white" size={28} />
+            </div>
+            <div>
+              <div className="text-xl font-bold mb-1">Delivery Shifts</div>
+              <div className="text-sky-100">Manage daily schedules for delivery staff</div>
+            </div>
+          </div>
+          <ArrowRight className="text-white" size={24} />
+        </div>
+      </Link>
+
       <div className="bg-sky-50 border border-sky-200 rounded-xl p-5" data-testid="pricing-info">
         <div className="flex items-start gap-3">
           <SettingsIcon className="text-sky-600 flex-shrink-0 mt-1" size={20} />
