@@ -230,11 +230,24 @@ export default function WhatsAppConnect() {
             </div>
           </div>
 
+          {/* Connection Status and Management */}
           <div className="bg-white rounded-2xl p-6 border border-slate-200">
             <h2 className="text-lg font-semibold text-slate-900 mb-3">Automation Management</h2>
             <p className="text-sm text-slate-600 mb-4">
               Need to stop automation temporarily? Disconnect to pause all automated responses. Your WhatsApp will continue working normally on your phone.
             </p>
+            
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
+              <h3 className="font-semibold text-amber-900 text-sm mb-2">While Connected:</h3>
+              <ul className="text-xs text-amber-800 space-y-1">
+                <li>✓ Customers get instant automated replies</li>
+                <li>✓ Orders created automatically in dashboard</li>
+                <li>✓ Delivery boys receive order notifications</li>
+                <li>✓ Status updates sync in real-time</li>
+                <li>✓ You can still use WhatsApp normally on phone</li>
+              </ul>
+            </div>
+            
             <button
               onClick={() => setShowDisconnectModal(true)}
               data-testid="disconnect-whatsapp-btn"
