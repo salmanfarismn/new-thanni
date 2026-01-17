@@ -19,7 +19,7 @@ export const api = axios.create({
 
 function BottomNav() {
   const location = useLocation();
-  
+
   const navItems = [
     { path: '/', icon: Package, label: 'Dashboard' },
     { path: '/orders', icon: TruckIcon, label: 'Orders' },
@@ -38,11 +38,10 @@ function BottomNav() {
               key={item.path}
               to={item.path}
               data-testid={`nav-${item.label.toLowerCase()}`}
-              className={`flex flex-col items-center justify-center py-2 px-3 rounded-lg transition-all ${
-                isActive 
-                  ? 'bg-sky-50 text-sky-600' 
+              className={`flex flex-col items-center justify-center py-2 px-3 rounded-lg transition-all ${isActive
+                  ? 'bg-sky-50 text-sky-600'
                   : 'text-slate-600 hover:bg-slate-50'
-              }`}
+                }`}
             >
               <Icon size={20} strokeWidth={1.5} />
               <span className="text-xs mt-1 font-medium">{item.label}</span>
@@ -56,7 +55,7 @@ function BottomNav() {
 
 function Sidebar() {
   const location = useLocation();
-  
+
   const navItems = [
     { path: '/', icon: Package, label: 'Dashboard' },
     { path: '/orders', icon: TruckIcon, label: 'Orders' },
@@ -72,12 +71,12 @@ function Sidebar() {
             <Droplets className="text-white" size={24} />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-900">HydroFlow</h1>
+            <h1 className="text-xl font-bold text-slate-900">Thanni Canuuu</h1>
             <p className="text-xs text-slate-500">Water Delivery</p>
           </div>
         </div>
       </div>
-      
+
       <nav className="flex-1 p-4 space-y-2">
         {navItems.map((item) => {
           const Icon = item.icon;
@@ -87,11 +86,10 @@ function Sidebar() {
               key={item.path}
               to={item.path}
               data-testid={`sidebar-${item.label.toLowerCase()}`}
-              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${
-                isActive 
-                  ? 'bg-sky-50 text-sky-600 font-medium' 
+              className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${isActive
+                  ? 'bg-sky-50 text-sky-600 font-medium'
                   : 'text-slate-600 hover:bg-slate-50'
-              }`}
+                }`}
             >
               <Icon size={20} strokeWidth={1.5} />
               <span>{item.label}</span>

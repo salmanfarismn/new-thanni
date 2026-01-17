@@ -1,7 +1,7 @@
-# HydroFlow - Water Can Delivery Management System
+# Thanni Canuuu - Water Can Delivery Management System
 
 ## Overview
-HydroFlow is a WhatsApp-first web application designed for local water can delivery businesses. It replaces manual memory-based operations with an automated system that provides real-time clarity to business owners.
+Thanni Canuuu is a WhatsApp-first web application designed for local water can delivery businesses. It replaces manual memory-based operations with an automated system that provides real-time clarity to business owners.
 
 ## Key Features
 

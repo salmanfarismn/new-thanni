@@ -829,6 +829,36 @@ async def delete_delivery_shift(staff_id: str, date: str, shift: str):
         raise HTTPException(status_code=404, detail="Delivery shift not found")
     return {"message": "Delivery shift deleted successfully"}
 
+@api_router.post("/seed")
+async def seed_database():
+    """Seed database with sample data for demo purposes"""
+    try:
+        import subprocess
+        import sys
+        
+        # Run the seed_data.py script
+        result = subprocess.run(
+            [sys.executable, "seed_data.py"],
+            cwd=ROOT_DIR,
+            capture_output=True,
+            text=True
+        )
+        
+        if result.returncode == 0:
+            return {
+                "success": True,
+                "message": "Database seeded successfully",
+                "output": result.stdout
+            }
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Seeding failed: {result.stderr}"
+            )
+    except Exception as e:
+        logging.error(f"Error seeding database: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 app.include_router(api_router)
 
 app.add_middleware(
