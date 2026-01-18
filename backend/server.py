@@ -110,6 +110,13 @@ class MessageResponse(BaseModel):
     reply: Optional[str] = None
     success: bool = True
 
+class OrderCreateRequest(BaseModel):
+    customer_phone: str
+    customer_name: str
+    customer_address: str
+    litre_size: int
+    quantity: int
+
 class StockUpdateRequest(BaseModel):
     total_stock: int
 
@@ -660,6 +667,86 @@ async def get_orders(status: Optional[str] = None, staff_id: Optional[str] = Non
     
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
     return orders
+
+@api_router.post("/orders")
+async def create_order_directly(order_req: OrderCreateRequest):
+    """Create an order directly (used by WhatsApp service)"""
+    try:
+        phone_number = order_req.customer_phone
+        quantity = order_req.quantity
+        litre_size = order_req.litre_size
+        
+        # 1. Check stock
+        stock = await get_today_stock()
+        if stock['available_stock'] < quantity:
+            raise HTTPException(status_code=400, detail=f"Insufficient stock. Available: {stock['available_stock']}")
+
+        # 2. Get price
+        price_per_can = await get_price_for_litre(litre_size)
+        total_amount = quantity * price_per_can
+
+        # 3. Assign delivery staff
+        staff, shift = await get_active_delivery_staff_for_shift()
+        if not staff:
+            raise HTTPException(status_code=400, detail="No delivery staff available for this shift.")
+
+        # 4. Create order
+        order_id = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        order_data = {
+            "order_id": order_id,
+            "customer_phone": phone_number,
+            "customer_name": order_req.customer_name,
+            "customer_address": order_req.customer_address,
+            "litre_size": litre_size,
+            "quantity": quantity,
+            "price_per_can": price_per_can,
+            "status": "pending",
+            "delivery_staff_id": staff['staff_id'],
+            "delivery_staff_name": staff['name'],
+            "payment_status": "pending",
+            "payment_method": None,
+            "amount": total_amount,
+            "shift_assigned": shift,
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "delivered_at": None
+        }
+        await db.orders.insert_one(order_data)
+
+        # 5. Update stock
+        await db.stock.update_one(
+            {"date": stock['date']},
+            {
+                "$inc": {"available_stock": -quantity, "orders_count": 1},
+                "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
+            }
+        )
+
+        # 6. Update staff count
+        await db.delivery_staff.update_one(
+            {"staff_id": staff['staff_id']},
+            {"$inc": {"active_orders_count": 1}}
+        )
+
+        # 7. Notify staff (async)
+        await send_whatsapp_message(
+            staff['phone_number'],
+            f"🚚 New Delivery Assignment\n\n*Order ID:* {order_id}\n*Shift:* {shift.upper()}\n*Customer:* {order_req.customer_name}\n*Address:* {order_req.customer_address}\n*Can Size:* {litre_size}L\n*Quantity:* {quantity} cans\n*Amount:* ₹{total_amount}\n\nPlease deliver ASAP!\n\nReply:\n*DELIVERED* - Mark as delivered\n*PAID CASH* - Delivered & paid (cash)\n*PAID UPI* - Delivered & paid (UPI)"
+        )
+
+        return {
+            "success": True, 
+            "order_id": order_id, 
+            "total_amount": total_amount, 
+            "delivery_staff": staff['name'],
+            "shift": shift
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating order: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @api_router.get("/orders/{order_id}")
 async def get_order(order_id: str):
