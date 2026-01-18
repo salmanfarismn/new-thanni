@@ -12,6 +12,7 @@ export default function Shifts() {
 
   useEffect(() => {
     loadData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedDate]);
 
   const loadData = async () => {
@@ -21,7 +22,7 @@ export default function Shifts() {
         api.get('/delivery-staff'),
         api.get(`/delivery-shifts?date_param=${selectedDate}`)
       ]);
-      
+
       setStaff(staffRes.data);
       setShifts(shiftsRes.data);
     } catch (error) {
@@ -39,10 +40,10 @@ export default function Shifts() {
 
   const updateStaffShift = (staffId, staffName, shiftType) => {
     const existing = shifts.find(s => s.staff_id === staffId);
-    
+
     if (existing) {
-      setShifts(shifts.map(s => 
-        s.staff_id === staffId 
+      setShifts(shifts.map(s =>
+        s.staff_id === staffId
           ? { ...s, shift: shiftType, is_active: shiftType !== 'none' }
           : s
       ));
@@ -60,13 +61,13 @@ export default function Shifts() {
   const saveShifts = async () => {
     try {
       setSaving(true);
-      
+
       for (const shift of shifts) {
         if (shift.shift !== 'none') {
           await api.post('/delivery-shifts', shift);
         }
       }
-      
+
       toast.success('Shifts saved successfully!');
       loadData();
     } catch (error) {
@@ -79,16 +80,15 @@ export default function Shifts() {
 
   const ShiftButton = ({ value, label, icon: Icon, color, staffId, staffName, currentShift }) => {
     const isSelected = currentShift === value;
-    
+
     return (
       <button
         onClick={() => updateStaffShift(staffId, staffName, value)}
         data-testid={`shift-btn-${staffId}-${value}`}
-        className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${
-          isSelected
+        className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${isSelected
             ? `bg-${color}-500 text-white shadow-md`
             : `bg-${color}-50 text-${color}-700 hover:bg-${color}-100 border border-${color}-200`
-        }`}
+          }`}
       >
         <div className="flex flex-col items-center gap-1">
           <Icon size={20} />
@@ -122,7 +122,7 @@ export default function Shifts() {
               Assign delivery boys to shifts. Orders are automatically assigned to available staff based on time.
             </p>
             <div className="mt-2 text-sm text-sky-700">
-              <span className="font-semibold">Morning:</span> 6 AM - 2 PM  |  
+              <span className="font-semibold">Morning:</span> 6 AM - 2 PM  |
               <span className="font-semibold ml-3">Evening:</span> 2 PM - 10 PM
             </div>
           </div>
@@ -148,7 +148,7 @@ export default function Shifts() {
           {staff.length > 0 ? (
             staff.map((person) => {
               const currentShift = getStaffShift(person.staff_id);
-              
+
               return (
                 <div
                   key={person.staff_id}
@@ -201,11 +201,10 @@ export default function Shifts() {
                     <button
                       onClick={() => updateStaffShift(person.staff_id, person.name, 'none')}
                       data-testid={`shift-btn-${person.staff_id}-none`}
-                      className={`py-3 px-4 rounded-lg font-medium transition-all ${
-                        currentShift.shift === 'none' || !currentShift.is_active
+                      className={`py-3 px-4 rounded-lg font-medium transition-all ${currentShift.shift === 'none' || !currentShift.is_active
                           ? 'bg-slate-500 text-white shadow-md'
                           : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200'
-                      }`}
+                        }`}
                     >
                       <div className="flex flex-col items-center gap-1">
                         <span className="text-xl">✕</span>

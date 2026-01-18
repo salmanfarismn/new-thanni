@@ -12,15 +12,39 @@ import uuid
 from datetime import datetime, timezone, date
 import httpx
 from whatsapp_cloud_api import whatsapp_api
+from contextlib import asynccontextmanager
+
+# Configure logging at module level
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
+
+# Validate required environment variables
+required_env_vars = ['MONGO_URL', 'DB_NAME']
+missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
+if missing_vars:
+    raise RuntimeError(f"Missing required environment variables: {', '.join(missing_vars)}. Please check your .env file.")
 
 mongo_url = os.environ['MONGO_URL']
 client = AsyncIOMotorClient(mongo_url)
 db = client[os.environ['DB_NAME']]
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup
+    logger.info("Starting up HydroFlow backend...")
+    logger.info(f"Connected to MongoDB: {os.environ['DB_NAME']}")
+    yield
+    # Shutdown
+    logger.info("Shutting down HydroFlow backend...")
+    client.close()
+
+app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
 WHATSAPP_SERVICE_URL = os.environ.get('WHATSAPP_SERVICE_URL', 'http://localhost:3001')
@@ -714,6 +738,79 @@ async def create_delivery_staff(staff: DeliveryStaff):
     await db.delivery_staff.insert_one(staff_dict)
     return staff
 
+@api_router.get("/customers")
+async def get_customers(limit: Optional[int] = Query(100)):
+    """Get all customers"""
+    customers = await db.customers.find({}, {"_id": 0}).limit(limit).to_list(limit)
+    return customers
+
+@api_router.get("/export/orders")
+async def export_orders(date_filter: Optional[str] = None, format: str = Query("json")):
+    """Export orders data in JSON or CSV format"""
+    query = {}
+    if date_filter:
+        query['created_at'] = {"$regex": f"^{date_filter}"}
+    
+    orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(10000)
+    
+    if format == "csv":
+        import csv
+        from io import StringIO
+        
+        if not orders:
+            return {"data": "", "format": "csv"}
+        
+        output = StringIO()
+        writer = csv.DictWriter(output, fieldnames=orders[0].keys())
+        writer.writeheader()
+        writer.writerows(orders)
+        
+        return {"data": output.getvalue(), "format": "csv", "count": len(orders)}
+    
+    return {"data": orders, "format": "json", "count": len(orders)}
+
+@api_router.get("/export/customers")
+async def export_customers(format: str = Query("json")):
+    """Export customers data in JSON or CSV format"""
+    customers = await db.customers.find({}, {"_id": 0}).to_list(10000)
+    
+    if format == "csv":
+        import csv
+        from io import StringIO
+        
+        if not customers:
+            return {"data": "", "format": "csv"}
+        
+        output = StringIO()
+        writer = csv.DictWriter(output, fieldnames=customers[0].keys())
+        writer.writeheader()
+        writer.writerows(customers)
+        
+        return {"data": output.getvalue(), "format": "csv", "count": len(customers)}
+    
+    return {"data": customers, "format": "json", "count": len(customers)}
+
+@api_router.get("/export/stock")
+async def export_stock(format: str = Query("json")):
+    """Export stock history data in JSON or CSV format"""
+    stock_data = await db.stock.find({}, {"_id": 0}).sort("date", -1).to_list(1000)
+    
+    if format == "csv":
+        import csv
+        from io import StringIO
+        
+        if not stock_data:
+            return {"data": "", "format": "csv"}
+        
+        output = StringIO()
+        writer = csv.DictWriter(output, fieldnames=stock_data[0].keys())
+        writer.writeheader()
+        writer.writerows(stock_data)
+        
+        return {"data": output.getvalue(), "format": "csv", "count": len(stock_data)}
+    
+    return {"data": stock_data, "format": "json", "count": len(stock_data)}
+
 @api_router.get("/whatsapp/qr")
 async def get_qr_code():
     """Get QR code for connecting owner's WhatsApp"""
@@ -859,8 +956,37 @@ async def seed_database():
         logging.error(f"Error seeding database: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
-app.include_router(api_router)
+# Health check endpoints
+@app.get("/")
+async def root():
+    """Root endpoint - health check"""
+    return {
+        "service": "HydroFlow Backend API",
+        "status": "running",
+        "version": "1.0.0",
+        "docs": "/docs"
+    }
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint"""
+    try:
+        # Test database connection
+        await db.command("ping")
+        return {
+            "status": "healthy",
+            "database": "connected",
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "database": "disconnected",
+            "error": str(e),
+            "timestamp": datetime.now(timezone.utc).isoformat()
+        }
+
+# Configure CORS middleware BEFORE including router
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
@@ -869,12 +995,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Include API router
+app.include_router(api_router)
 
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()

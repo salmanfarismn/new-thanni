@@ -18,6 +18,7 @@ export default function WhatsAppConnect() {
       }
     }, 3000);
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const checkStatus = async () => {
@@ -80,8 +81,8 @@ export default function WhatsAppConnect() {
     <div className="max-w-2xl mx-auto space-y-6 px-4 py-6">
       {/* Status Card */}
       <div className={`rounded-2xl p-6 text-center ${status.connected
-          ? 'bg-emerald-50 border-2 border-emerald-200'
-          : 'bg-amber-50 border-2 border-amber-200'
+        ? 'bg-emerald-50 border-2 border-emerald-200'
+        : 'bg-amber-50 border-2 border-amber-200'
         }`}>
         <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${status.connected ? 'bg-emerald-500' : 'bg-amber-500'
           }`}>

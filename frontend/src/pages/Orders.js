@@ -12,6 +12,7 @@ export default function Orders() {
 
   useEffect(() => {
     loadOrders();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
   const loadOrders = async () => {
@@ -36,7 +37,7 @@ export default function Orders() {
       const payload = { order_id: orderId, status };
       if (paymentStatus) payload.payment_status = paymentStatus;
       if (paymentMethod) payload.payment_method = paymentMethod;
-      
+
       await api.put(`/orders/${orderId}/status`, payload);
       toast.success(`Order ${status}!`);
       loadOrders();
@@ -48,7 +49,7 @@ export default function Orders() {
   };
 
   const filteredOrders = orders.filter(order => {
-    const matchesSearch = 
+    const matchesSearch =
       order.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.order_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.customer_phone.includes(searchTerm);
@@ -59,11 +60,10 @@ export default function Orders() {
     <button
       onClick={() => setFilter(value)}
       data-testid={`filter-${value}`}
-      className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${
-        filter === value
+      className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${filter === value
           ? 'bg-sky-500 text-white shadow-sm'
           : 'bg-white text-slate-600 border border-slate-200 hover:border-sky-200'
-      }`}
+        }`}
     >
       {label} {count !== undefined && `(${count})`}
     </button>
@@ -113,16 +113,14 @@ export default function Orders() {
               <div className="bg-slate-50 p-4 rounded-xl">
                 <div className="text-sm text-slate-600 mb-2">Status</div>
                 <div className="flex gap-2">
-                  <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
-                    order.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' :
-                    order.status === 'pending' ? 'bg-amber-100 text-amber-700' :
-                    'bg-red-100 text-red-700'
-                  }`}>
+                  <span className={`px-3 py-1 rounded-full text-sm font-semibold ${order.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' :
+                      order.status === 'pending' ? 'bg-amber-100 text-amber-700' :
+                        'bg-red-100 text-red-700'
+                    }`}>
                     {order.status.toUpperCase()}
                   </span>
-                  <span className={`px-3 py-1 rounded-full text-sm font-semibold ${
-                    order.payment_status === 'paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
-                  }`}>
+                  <span className={`px-3 py-1 rounded-full text-sm font-semibold ${order.payment_status === 'paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'
+                    }`}>
                     {order.payment_status === 'paid' ? 'PAID' : 'PAYMENT PENDING'}
                   </span>
                 </div>
@@ -227,11 +225,10 @@ export default function Orders() {
                   <div className="font-semibold text-slate-900">{order.customer_name}</div>
                   <div className="text-sm text-slate-500">{order.order_id}</div>
                 </div>
-                <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide ${
-                  order.status === 'delivered' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                  order.status === 'pending' ? 'bg-amber-50 text-amber-700 border border-amber-100' :
-                  'bg-red-50 text-red-700 border border-red-100'
-                }`}>
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide ${order.status === 'delivered' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
+                    order.status === 'pending' ? 'bg-amber-50 text-amber-700 border border-amber-100' :
+                      'bg-red-50 text-red-700 border border-red-100'
+                  }`}>
                   {order.status}
                 </span>
               </div>
@@ -250,18 +247,17 @@ export default function Orders() {
                 </div>
               </div>
               <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-                <span className={`text-xs font-medium ${
-                  order.payment_status === 'paid' ? 'text-emerald-600' : 'text-amber-600'
-                }`}>
+                <span className={`text-xs font-medium ${order.payment_status === 'paid' ? 'text-emerald-600' : 'text-amber-600'
+                  }`}>
                   {order.payment_status === 'paid' ? '✓ Paid' : '○ Pending Payment'}
                   {order.payment_method && ` (${order.payment_method.toUpperCase()})`}
                 </span>
                 <span className="text-xs text-slate-500">
-                  {new Date(order.created_at).toLocaleString('en-IN', { 
-                    month: 'short', 
+                  {new Date(order.created_at).toLocaleString('en-IN', {
+                    month: 'short',
                     day: 'numeric',
-                    hour: '2-digit', 
-                    minute: '2-digit' 
+                    hour: '2-digit',
+                    minute: '2-digit'
                   })}
                 </span>
               </div>
