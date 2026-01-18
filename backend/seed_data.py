@@ -12,6 +12,12 @@ from pathlib import Path
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+# Validate required environment variables
+required_env_vars = ['MONGO_URL', 'DB_NAME']
+missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
+if missing_vars:
+    raise RuntimeError(f"Missing required environment variables: {', '.join(missing_vars)}. Please check your .env file.")
+
 mongo_url = os.environ['MONGO_URL']
 db_name = os.environ['DB_NAME']
 
@@ -19,7 +25,7 @@ async def seed_database():
     client = AsyncIOMotorClient(mongo_url)
     db = client[db_name]
     
-    print("🌱 Starting database seeding...")
+    print("Starting database seeding...")
     
     # Clear existing data (optional - comment out if you want to keep data)
     print("Clearing existing data...")
@@ -54,7 +60,7 @@ async def seed_database():
         }
     ]
     await db.delivery_staff.insert_many(delivery_staff)
-    print(f"✓ Created {len(delivery_staff)} delivery staff")
+    print(f"- Created {len(delivery_staff)} delivery staff")
     
     # Seed Delivery Shifts
     print("Creating delivery shifts...")
@@ -86,7 +92,7 @@ async def seed_database():
         }
     ]
     await db.delivery_shifts.insert_many(shifts)
-    print(f"✓ Created {len(shifts)} delivery shifts")
+    print(f"- Created {len(shifts)} delivery shifts")
     
     # Seed Price Settings
     print("Creating price settings...")
@@ -105,7 +111,7 @@ async def seed_database():
         }
     ]
     await db.price_settings.insert_many(price_settings)
-    print(f"✓ Created {len(price_settings)} price settings")
+    print(f"- Created {len(price_settings)} price settings")
     
     # Seed Customers
     print("Creating customers...")
@@ -142,7 +148,7 @@ async def seed_database():
         }
     ]
     await db.customers.insert_many(customers)
-    print(f"✓ Created {len(customers)} customers")
+    print(f"- Created {len(customers)} customers")
     
     # Seed Stock
     print("Creating stock...")
@@ -154,7 +160,7 @@ async def seed_database():
         "updated_at": datetime.now(timezone.utc).isoformat()
     }
     await db.stock.insert_one(stock)
-    print("✓ Created today's stock")
+    print("- Created today's stock")
     
     # Seed Orders
     print("Creating orders...")
@@ -252,7 +258,7 @@ async def seed_database():
         }
     ]
     await db.orders.insert_many(orders)
-    print(f"✓ Created {len(orders)} orders")
+    print(f"- Created {len(orders)} orders")
     
     # Update delivery staff active order counts
     await db.delivery_staff.update_one(
@@ -265,7 +271,7 @@ async def seed_database():
     )
     
     client.close()
-    print("\n✅ Database seeding completed successfully!")
+    print("\nDatabase seeding completed successfully!")
     print(f"   - {len(delivery_staff)} delivery staff")
     print(f"   - {len(customers)} customers")
     print(f"   - {len(orders)} orders (3 delivered, 2 pending)")
