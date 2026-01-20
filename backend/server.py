@@ -13,6 +13,8 @@ from datetime import datetime, timezone, date
 import httpx
 from whatsapp_cloud_api import whatsapp_api
 from contextlib import asynccontextmanager
+import asyncio
+from collections import deque
 
 # Configure logging at module level
 logging.basicConfig(
@@ -74,6 +76,8 @@ class DeliveryStaff(BaseModel):
     name: str
     phone_number: str
     active_orders_count: int = 0
+    is_active: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 class Order(BaseModel):
     order_id: str
@@ -92,6 +96,10 @@ class Order(BaseModel):
     shift_assigned: Optional[str] = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     delivered_at: Optional[datetime] = None
+    # Notification queue fields
+    notification_status: str = "queued"  # queued, sending, sent, failed
+    notification_attempts: int = 0
+    last_notification_error: Optional[str] = None
 
 class Stock(BaseModel):
     date: str
@@ -118,13 +126,130 @@ class OrderCreateRequest(BaseModel):
     quantity: int
 
 class StockUpdateRequest(BaseModel):
-    total_stock: int
+    total_stock: Optional[int] = None
+    increment: Optional[int] = None
 
 class DeliveryUpdate(BaseModel):
     order_id: str
     status: str
     payment_status: Optional[str] = None
     payment_method: Optional[str] = None
+
+# ============================================
+# ORDER NOTIFICATION QUEUE SYSTEM
+# ============================================
+notification_queue = deque()
+queue_lock = asyncio.Lock()
+queue_processor_task = None
+
+async def add_to_notification_queue(order_id: str):
+    """Add an order to the notification queue and start processor if needed"""
+    global queue_processor_task
+    
+    async with queue_lock:
+        # Avoid duplicates
+        if order_id not in notification_queue:
+            notification_queue.append(order_id)
+            logger.info(f"Added order {order_id} to notification queue. Queue size: {len(notification_queue)}")
+    
+    # Start processor if not running
+    if queue_processor_task is None or queue_processor_task.done():
+        queue_processor_task = asyncio.create_task(process_notification_queue())
+
+async def process_notification_queue():
+    """Background worker to process order notifications sequentially"""
+    logger.info("Starting notification queue processor...")
+    
+    while True:
+        order_id = None
+        async with queue_lock:
+            if notification_queue:
+                order_id = notification_queue.popleft()
+        
+        if order_id is None:
+            logger.info("Notification queue empty, processor stopping.")
+            break
+        
+        try:
+            await send_order_notification(order_id)
+        except Exception as e:
+            logger.error(f"Error processing notification for {order_id}: {e}")
+        
+        # Rate limiting - wait between messages
+        await asyncio.sleep(0.5)
+
+async def send_order_notification(order_id: str):
+    """Send WhatsApp notification for a specific order"""
+    order = await db.orders.find_one({"order_id": order_id})
+    if not order:
+        logger.warning(f"Order {order_id} not found for notification")
+        return
+    
+    # Skip if already sent
+    if order.get('notification_status') == 'sent':
+        logger.info(f"Order {order_id} notification already sent, skipping")
+        return
+    
+    # Mark as sending
+    await db.orders.update_one(
+        {"order_id": order_id},
+        {"$set": {"notification_status": "sending"}}
+    )
+    
+    try:
+        # Get delivery staff
+        staff = await db.delivery_staff.find_one({"staff_id": order.get('delivery_staff_id')})
+        if not staff:
+            raise Exception("Delivery staff not found")
+        
+        # Get company name for branding
+        company_name = await get_company_name()
+        
+        # Build notification message
+        message = (
+            f"New Delivery Assignment from {company_name}\n\n"
+            f"*Order ID:* {order['order_id']}\n"
+            f"*Shift:* {(order.get('shift_assigned') or 'N/A').upper()}\n"
+            f"*Customer:* {order['customer_name']}\n"
+            f"*Address:* {order['customer_address']}\n"
+            f"*Can Size:* {order['litre_size']}L\n"
+            f"*Quantity:* {order['quantity']} cans\n"
+            f"*Amount:* Rs.{order['amount']}\n\n"
+            f"Please deliver ASAP!\n\n"
+            f"Reply:\n"
+            f"*DELIVERED* - Mark as delivered\n"
+            f"*PAID CASH* - Delivered & paid (cash)\n"
+            f"*PAID UPI* - Delivered & paid (UPI)"
+        )
+        
+        # Send message
+        result = await send_whatsapp_message(staff['phone_number'], message)
+        
+        if result.get('success'):
+            await db.orders.update_one(
+                {"order_id": order_id},
+                {"$set": {
+                    "notification_status": "sent",
+                    "last_notification_error": None
+                }}
+            )
+            logger.info(f"Notification sent successfully for order {order_id}")
+        else:
+            raise Exception(result.get('error', 'Unknown error'))
+            
+    except Exception as e:
+        error_msg = str(e)
+        attempts = order.get('notification_attempts', 0) + 1
+        
+        await db.orders.update_one(
+            {"order_id": order_id},
+            {"$set": {
+                "notification_status": "failed",
+                "notification_attempts": attempts,
+                "last_notification_error": error_msg
+            }}
+        )
+        logger.error(f"Failed to send notification for order {order_id}: {error_msg}")
 
 async def send_whatsapp_message(phone_number: str, message: str):
     """Send WhatsApp message using available method (Cloud API or Baileys)"""
@@ -217,7 +342,8 @@ async def get_active_delivery_staff_for_shift():
     staff_ids = [s['staff_id'] for s in active_shifts]
     
     staff = await db.delivery_staff.find({
-        "staff_id": {"$in": staff_ids}
+        "staff_id": {"$in": staff_ids},
+        "is_active": True
     }).sort("active_orders_count", 1).limit(1).to_list(1)
     
     if staff:
@@ -652,6 +778,77 @@ async def get_dashboard_metrics():
         "total_stock": stock['total_stock']
     }
 
+@api_router.get("/dashboard/sales")
+async def get_dashboard_sales(
+    start_date: Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="End date YYYY-MM-DD")
+):
+    """
+    Get sales metrics for a date range.
+    If no dates provided, defaults to today.
+    """
+    try:
+        # Default to today if no dates provided
+        if not start_date:
+            start_date = date.today().isoformat()
+        if not end_date:
+            end_date = date.today().isoformat()
+        
+        # Validate date format
+        try:
+            datetime.strptime(start_date, "%Y-%m-%d")
+            datetime.strptime(end_date, "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        
+        # Build date range query
+        # created_at is stored as ISO string, so we use string comparison
+        query = {
+            "created_at": {
+                "$gte": f"{start_date}T00:00:00",
+                "$lte": f"{end_date}T23:59:59"
+            }
+        }
+        
+        orders = await db.orders.find(query).to_list(10000)
+        
+        # Calculate metrics
+        total_orders = len(orders)
+        total_cans_sold = sum(o.get('quantity', 0) for o in orders)
+        
+        # Revenue from paid orders
+        paid_orders = [o for o in orders if o.get('payment_status') == 'paid']
+        total_revenue = sum(o.get('amount', 0) for o in paid_orders)
+        
+        # All orders revenue (including pending)
+        total_order_value = sum(o.get('amount', 0) for o in orders)
+        
+        # Breakdown by status
+        delivered_orders = len([o for o in orders if o.get('status') == 'delivered'])
+        pending_orders = len([o for o in orders if o.get('status') == 'pending'])
+        
+        # Payment breakdown
+        paid_count = len(paid_orders)
+        pending_payment_count = len([o for o in orders if o.get('payment_status') == 'pending'])
+        
+        return {
+            "start_date": start_date,
+            "end_date": end_date,
+            "total_orders": total_orders,
+            "total_cans_sold": total_cans_sold,
+            "total_revenue": total_revenue,
+            "total_order_value": total_order_value,
+            "delivered_orders": delivered_orders,
+            "pending_orders": pending_orders,
+            "paid_orders": paid_count,
+            "pending_payment_orders": pending_payment_count
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error fetching sales data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @api_router.get("/orders")
 async def get_orders(status: Optional[str] = None, staff_id: Optional[str] = None, date_filter: Optional[str] = None):
     query = {}
@@ -690,7 +887,7 @@ async def create_order_directly(order_req: OrderCreateRequest):
         if not staff:
             raise HTTPException(status_code=400, detail="No delivery staff available for this shift.")
 
-        # 4. Create order
+        # 4. Create order with notification queued
         order_id = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}"
         order_data = {
             "order_id": order_id,
@@ -708,7 +905,11 @@ async def create_order_directly(order_req: OrderCreateRequest):
             "amount": total_amount,
             "shift_assigned": shift,
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "delivered_at": None
+            "delivered_at": None,
+            # Queue fields
+            "notification_status": "queued",
+            "notification_attempts": 0,
+            "last_notification_error": None
         }
         await db.orders.insert_one(order_data)
 
@@ -727,18 +928,16 @@ async def create_order_directly(order_req: OrderCreateRequest):
             {"$inc": {"active_orders_count": 1}}
         )
 
-        # 7. Notify staff (async)
-        await send_whatsapp_message(
-            staff['phone_number'],
-            f"🚚 New Delivery Assignment\n\n*Order ID:* {order_id}\n*Shift:* {shift.upper()}\n*Customer:* {order_req.customer_name}\n*Address:* {order_req.customer_address}\n*Can Size:* {litre_size}L\n*Quantity:* {quantity} cans\n*Amount:* ₹{total_amount}\n\nPlease deliver ASAP!\n\nReply:\n*DELIVERED* - Mark as delivered\n*PAID CASH* - Delivered & paid (cash)\n*PAID UPI* - Delivered & paid (UPI)"
-        )
+        # 7. Add to notification queue (processed in background)
+        await add_to_notification_queue(order_id)
 
         return {
             "success": True, 
             "order_id": order_id, 
             "total_amount": total_amount, 
             "delivery_staff": staff['name'],
-            "shift": shift
+            "shift": shift,
+            "notification_status": "queued"
         }
 
     except HTTPException:
@@ -754,6 +953,48 @@ async def get_order(order_id: str):
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
     return order
+
+@api_router.post("/orders/{order_id}/retry-notification")
+async def retry_order_notification(order_id: str):
+    """Retry sending notification for a failed order"""
+    order = await db.orders.find_one({"order_id": order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    if order.get('notification_status') == 'sent':
+        return {"success": False, "message": "Notification already sent"}
+    
+    # Reset status and add to queue
+    await db.orders.update_one(
+        {"order_id": order_id},
+        {"$set": {"notification_status": "queued"}}
+    )
+    
+    await add_to_notification_queue(order_id)
+    
+    return {"success": True, "message": "Order added to notification queue for retry"}
+
+@api_router.get("/orders/queue/status")
+async def get_notification_queue_status():
+    """Get current notification queue status"""
+    # Count orders by notification status
+    pipeline = [
+        {"$group": {"_id": "$notification_status", "count": {"$sum": 1}}}
+    ]
+    status_counts = await db.orders.aggregate(pipeline).to_list(10)
+    
+    status_map = {item['_id']: item['count'] for item in status_counts if item['_id']}
+    
+    return {
+        "queue_size": len(notification_queue),
+        "processing": queue_processor_task is not None and not queue_processor_task.done(),
+        "orders_by_status": {
+            "queued": status_map.get("queued", 0),
+            "sending": status_map.get("sending", 0),
+            "sent": status_map.get("sent", 0),
+            "failed": status_map.get("failed", 0)
+        }
+    }
 
 @api_router.put("/orders/{order_id}/status")
 async def update_order_status(order_id: str, update: DeliveryUpdate):
@@ -795,35 +1036,153 @@ async def get_stock(date_param: Optional[str] = Query(None)):
 @api_router.put("/stock")
 async def update_stock(stock_update: StockUpdateRequest):
     today = date.today().isoformat()
+    # Always fetch current stock first for calculations
     stock = await get_today_stock()
-    
-    used_stock = stock['total_stock'] - stock['available_stock']
-    new_available = stock_update.total_stock - used_stock
-    
-    await db.stock.update_one(
-        {"date": today},
-        {
-            "$set": {
-                "total_stock": stock_update.total_stock,
-                "available_stock": max(0, new_available),
-                "updated_at": datetime.now(timezone.utc).isoformat()
+    if stock_update.increment is not None:
+        # Increment both total and available stock
+        await db.stock.update_one(
+            {"date": today},
+            {
+                "$inc": {
+                    "total_stock": stock_update.increment,
+                    "available_stock": stock_update.increment
+                },
+                "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
             }
-        }
-    )
+        )
+    elif stock_update.total_stock is not None:
+        # Maintaining existing logic for explicit total_stock updates
+        used_stock = stock['total_stock'] - stock['available_stock']
+        new_available = stock_update.total_stock - used_stock
+        
+        await db.stock.update_one(
+            {"date": today},
+            {
+                "$set": {
+                    "total_stock": stock_update.total_stock,
+                    "available_stock": max(0, new_available),
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                }
+            }
+        )
     
     updated_stock = await db.stock.find_one({"date": today}, {"_id": 0})
     return updated_stock
 
 @api_router.get("/delivery-staff")
 async def get_delivery_staff():
-    staff = await db.delivery_staff.find({}, {"_id": 0}).to_list(100)
+    staff = await db.delivery_staff.find({}, {"_id": 0}).sort("created_at", -1).to_list(100)
     return staff
 
 @api_router.post("/delivery-staff")
 async def create_delivery_staff(staff: DeliveryStaff):
+    """Create a new delivery staff member with validation"""
+    # Validate phone number format (at least 10 digits)
+    phone = staff.phone_number.strip()
+    if not phone or len(phone) < 10 or not phone.replace('+', '').replace('-', '').replace(' ', '').isdigit():
+        raise HTTPException(status_code=400, detail="Invalid phone number format. Must be at least 10 digits.")
+    
+    # Check for duplicate phone number
+    existing = await db.delivery_staff.find_one({"phone_number": phone})
+    if existing:
+        raise HTTPException(status_code=400, detail="Delivery staff with this phone number already exists")
+    
     staff_dict = staff.model_dump()
+    staff_dict['phone_number'] = phone
+    staff_dict['created_at'] = datetime.now(timezone.utc).isoformat()
     await db.delivery_staff.insert_one(staff_dict)
-    return staff
+    # Remove MongoDB _id to avoid serialization error
+    staff_dict.pop('_id', None)
+    return {"success": True, "message": "Delivery staff added successfully", "staff": staff_dict}
+
+@api_router.put("/delivery-staff/{staff_id}")
+async def update_delivery_staff_status(staff_id: str, is_active: bool = Query(...)):
+    """Toggle delivery staff active status"""
+    result = await db.delivery_staff.update_one(
+        {"staff_id": staff_id},
+        {"$set": {"is_active": is_active}}
+    )
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Delivery staff not found")
+    
+    status = "activated" if is_active else "deactivated"
+    return {"success": True, "message": f"Delivery staff {status} successfully"}
+
+@api_router.delete("/delivery-staff/{staff_id}")
+async def delete_delivery_staff(staff_id: str):
+    """Delete a delivery staff member"""
+    # Check for pending orders assigned to this staff
+    pending_orders = await db.orders.count_documents({
+        "delivery_staff_id": staff_id,
+        "status": "pending"
+    })
+    
+    if pending_orders > 0:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Cannot delete: {pending_orders} pending order(s) assigned to this staff member"
+        )
+    
+    result = await db.delivery_staff.delete_one({"staff_id": staff_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Delivery staff not found")
+    
+    # Also delete any future shifts for this staff
+    await db.delivery_shifts.delete_many({"staff_id": staff_id})
+    
+    return {"success": True, "message": "Delivery staff deleted successfully"}
+
+# ============================================
+# APP SETTINGS (Company Name Customization)
+# ============================================
+DEFAULT_COMPANY_NAME = "Thanni Canuuu"
+
+async def get_company_name():
+    """Get current company name or default"""
+    settings = await db.app_settings.find_one({"key": "company_name"})
+    if settings and settings.get('value'):
+        return settings['value']
+    return DEFAULT_COMPANY_NAME
+
+@api_router.get("/app-settings")
+async def get_app_settings():
+    """Get all app settings"""
+    company_name = await get_company_name()
+    return {
+        "company_name": company_name,
+        "default_name": DEFAULT_COMPANY_NAME
+    }
+
+@api_router.put("/app-settings/company-name")
+async def update_company_name(company_name: str = Query(..., min_length=1, max_length=100)):
+    """Update company/shop name"""
+    # Validate - prevent whitespace-only names
+    cleaned_name = company_name.strip()
+    if not cleaned_name:
+        raise HTTPException(status_code=400, detail="Company name cannot be empty or whitespace only")
+    
+    if len(cleaned_name) > 100:
+        raise HTTPException(status_code=400, detail="Company name must be 100 characters or less")
+    
+    await db.app_settings.update_one(
+        {"key": "company_name"},
+        {
+            "$set": {
+                "key": "company_name",
+                "value": cleaned_name,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }
+        },
+        upsert=True
+    )
+    
+    return {"success": True, "company_name": cleaned_name, "message": "Company name updated successfully"}
+
+@api_router.delete("/app-settings/company-name")
+async def reset_company_name():
+    """Reset company name to default"""
+    await db.app_settings.delete_one({"key": "company_name"})
+    return {"success": True, "company_name": DEFAULT_COMPANY_NAME, "message": "Company name reset to default"}
 
 @api_router.get("/customers")
 async def get_customers(limit: Optional[int] = Query(100)):

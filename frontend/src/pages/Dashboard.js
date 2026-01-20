@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../App';
-import { Package, TruckIcon, IndianRupee, Droplets, CheckCircle, Clock, AlertCircle } from 'lucide-react';
+import { Package, TruckIcon, IndianRupee, Droplets, CheckCircle, Clock, AlertCircle, Calendar, Filter } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function Dashboard() {
@@ -9,11 +9,23 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [staff, setStaff] = useState([]);
 
+  // Sales filter state
+  const [salesData, setSalesData] = useState(null);
+  const [salesLoading, setSalesLoading] = useState(false);
+  const [salesFilter, setSalesFilter] = useState('today');
+  const [customStartDate, setCustomStartDate] = useState('');
+  const [customEndDate, setCustomEndDate] = useState('');
+
   useEffect(() => {
     loadData();
     const interval = setInterval(loadData, 30000);
     return () => clearInterval(interval);
   }, []);
+
+  useEffect(() => {
+    loadSalesData();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [salesFilter, customStartDate, customEndDate]);
 
   const loadData = async () => {
     try {
@@ -30,6 +42,52 @@ export default function Dashboard() {
       toast.error('Failed to load dashboard data');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const loadSalesData = async () => {
+    try {
+      setSalesLoading(true);
+
+      let startDate, endDate;
+      const today = new Date();
+
+      switch (salesFilter) {
+        case 'today':
+          startDate = endDate = today.toISOString().split('T')[0];
+          break;
+        case 'week':
+          const weekStart = new Date(today);
+          weekStart.setDate(today.getDate() - today.getDay());
+          startDate = weekStart.toISOString().split('T')[0];
+          endDate = today.toISOString().split('T')[0];
+          break;
+        case 'month':
+          const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+          startDate = monthStart.toISOString().split('T')[0];
+          endDate = today.toISOString().split('T')[0];
+          break;
+        case 'custom':
+          if (!customStartDate || !customEndDate) {
+            setSalesLoading(false);
+            return;
+          }
+          startDate = customStartDate;
+          endDate = customEndDate;
+          break;
+        default:
+          startDate = endDate = today.toISOString().split('T')[0];
+      }
+
+      const response = await api.get('/dashboard/sales', {
+        params: { start_date: startDate, end_date: endDate }
+      });
+      setSalesData(response.data);
+    } catch (error) {
+      console.error('Error loading sales data:', error);
+      toast.error('Failed to load sales data');
+    } finally {
+      setSalesLoading(false);
     }
   };
 
@@ -69,7 +127,7 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-          <div 
+          <div
             className="h-full bg-gradient-to-r from-sky-400 to-blue-500 transition-all duration-500"
             style={{ width: `${((metrics?.available_stock || 0) / (metrics?.total_stock || 1)) * 100}%` }}
           />
@@ -105,7 +163,7 @@ export default function Dashboard() {
         <div className="text-sm text-slate-600 mb-2">
           <div className="flex items-center gap-2 mb-1">
             <Package size={14} />
-            <span>{order.quantity} cans × ₹50 = ₹{order.amount}</span>
+            <span>{order.quantity} cans × ₹{order.price_per_can} = ₹{order.amount}</span>
           </div>
           <div className="flex items-center gap-2">
             <TruckIcon size={14} />
@@ -113,9 +171,8 @@ export default function Dashboard() {
           </div>
         </div>
         <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-          <span className={`text-xs font-medium ${
-            order.payment_status === 'paid' ? 'text-emerald-600' : 'text-amber-600'
-          }`}>
+          <span className={`text-xs font-medium ${order.payment_status === 'paid' ? 'text-emerald-600' : 'text-amber-600'
+            }`}>
             {order.payment_status === 'paid' ? '✓ Paid' : '○ Pending Payment'}
           </span>
           <span className="text-xs text-slate-500">
@@ -174,6 +231,115 @@ export default function Dashboard() {
         <MetricCard icon={CheckCircle} label="Delivered" value={metrics?.delivered_orders || 0} color="emerald" />
         <MetricCard icon={Clock} label="Pending" value={metrics?.pending_orders || 0} color="amber" />
         <MetricCard icon={Droplets} label="Cans Sold" value={metrics?.total_cans || 0} />
+      </div>
+
+      {/* Sales Filter Section */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden" data-testid="sales-filter-section">
+        <div className="p-5 border-b border-slate-100">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="flex items-center gap-2">
+              <Filter size={18} className="text-slate-500" />
+              <span className="font-semibold text-slate-900">Sales Report</span>
+            </div>
+
+            <select
+              value={salesFilter}
+              onChange={(e) => setSalesFilter(e.target.value)}
+              className="px-4 py-2 border-2 border-slate-200 rounded-lg text-sm font-medium focus:border-sky-400 focus:ring-2 focus:ring-sky-100 transition-all"
+              data-testid="sales-filter-select"
+            >
+              <option value="today">Today</option>
+              <option value="week">This Week</option>
+              <option value="month">This Month</option>
+              <option value="custom">Custom Range</option>
+            </select>
+
+            {salesFilter === 'custom' && (
+              <div className="flex items-center gap-2">
+                <input
+                  type="date"
+                  value={customStartDate}
+                  onChange={(e) => setCustomStartDate(e.target.value)}
+                  className="px-3 py-2 border-2 border-slate-200 rounded-lg text-sm focus:border-sky-400"
+                  data-testid="custom-start-date"
+                />
+                <span className="text-slate-400">to</span>
+                <input
+                  type="date"
+                  value={customEndDate}
+                  onChange={(e) => setCustomEndDate(e.target.value)}
+                  className="px-3 py-2 border-2 border-slate-200 rounded-lg text-sm focus:border-sky-400"
+                  data-testid="custom-end-date"
+                />
+              </div>
+            )}
+          </div>
+
+          {salesData && (
+            <div className="text-xs text-slate-500 mt-2 flex items-center gap-1">
+              <Calendar size={12} />
+              {salesData.start_date === salesData.end_date
+                ? salesData.start_date
+                : `${salesData.start_date} to ${salesData.end_date}`
+              }
+            </div>
+          )}
+        </div>
+
+        <div className="p-5">
+          {salesLoading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
+            </div>
+          ) : salesData ? (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-sky-50 p-4 rounded-xl">
+                <div className="text-2xl font-bold text-sky-700">{salesData.total_orders}</div>
+                <div className="text-sm text-sky-600">Total Orders</div>
+              </div>
+              <div className="bg-emerald-50 p-4 rounded-xl">
+                <div className="text-2xl font-bold text-emerald-700">{salesData.total_cans_sold}</div>
+                <div className="text-sm text-emerald-600">Cans Sold</div>
+              </div>
+              <div className="bg-violet-50 p-4 rounded-xl">
+                <div className="text-2xl font-bold text-violet-700">₹{salesData.total_revenue}</div>
+                <div className="text-sm text-violet-600">Revenue (Paid)</div>
+              </div>
+              <div className="bg-amber-50 p-4 rounded-xl">
+                <div className="text-2xl font-bold text-amber-700">₹{salesData.total_order_value}</div>
+                <div className="text-sm text-amber-600">Total Order Value</div>
+              </div>
+            </div>
+          ) : (
+            <div className="text-center text-slate-500 py-8">
+              {salesFilter === 'custom' && (!customStartDate || !customEndDate)
+                ? 'Select start and end dates'
+                : 'No sales data available'
+              }
+            </div>
+          )}
+
+          {salesData && salesData.total_orders > 0 && (
+            <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 md:grid-cols-4 gap-4 text-center text-sm">
+              <div>
+                <span className="text-emerald-600 font-semibold">{salesData.delivered_orders}</span>
+                <span className="text-slate-500 ml-1">Delivered</span>
+              </div>
+              <div>
+                <span className="text-amber-600 font-semibold">{salesData.pending_orders}</span>
+                <span className="text-slate-500 ml-1">Pending</span>
+              </div>
+              <div>
+                <span className="text-emerald-600 font-semibold">{salesData.paid_orders}</span>
+                <span className="text-slate-500 ml-1">Paid</span>
+              </div>
+              <div>
+                <span className="text-amber-600 font-semibold">{salesData.pending_payment_orders}</span>
+                <span className="text-slate-500 ml-1">Payment Pending</span>
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">

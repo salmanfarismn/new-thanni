@@ -1,13 +1,23 @@
 import { useState, useEffect } from 'react';
 import { api } from '../App';
 import { Link } from 'react-router-dom';
-import { Settings as SettingsIcon, Save, Droplet, IndianRupee, Plus, Clock, ArrowRight, MessageSquare } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Droplet, IndianRupee, Plus, Clock, ArrowRight, MessageSquare, Users, Building2, RotateCcw } from 'lucide-react';
 import { toast } from 'sonner';
+import { useCompanyName } from '../App';
 
 export default function Settings() {
   const [prices, setPrices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  // Company name settings
+  const { companyName, refreshCompanyName } = useCompanyName();
+  const [editCompanyName, setEditCompanyName] = useState('');
+  const [savingCompanyName, setSavingCompanyName] = useState(false);
+
+  useEffect(() => {
+    setEditCompanyName(companyName);
+  }, [companyName]);
 
   useEffect(() => {
     loadPrices();
@@ -17,7 +27,7 @@ export default function Settings() {
     try {
       const response = await api.get('/price-settings');
       const existingPrices = response.data;
-      
+
       if (existingPrices.length === 0) {
         setPrices([
           { litre_size: 20, price_per_can: 45, is_active: true },
@@ -35,16 +45,16 @@ export default function Settings() {
   };
 
   const updatePrice = (litreSize, newPrice) => {
-    setPrices(prices.map(p => 
-      p.litre_size === litreSize 
+    setPrices(prices.map(p =>
+      p.litre_size === litreSize
         ? { ...p, price_per_can: parseFloat(newPrice) || 0 }
         : p
     ));
   };
 
   const toggleActive = (litreSize) => {
-    setPrices(prices.map(p => 
-      p.litre_size === litreSize 
+    setPrices(prices.map(p =>
+      p.litre_size === litreSize
         ? { ...p, is_active: !p.is_active }
         : p
     ));
@@ -53,11 +63,11 @@ export default function Settings() {
   const savePrices = async () => {
     try {
       setSaving(true);
-      
+
       for (const price of prices) {
         await api.post('/price-settings', price);
       }
-      
+
       toast.success('Price settings saved successfully!');
       loadPrices();
     } catch (error) {
@@ -80,10 +90,78 @@ export default function Settings() {
     <div className="space-y-6" data-testid="settings-page">
       <div>
         <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Settings</h1>
-        <p className="text-slate-600 mt-1">Manage pricing and configurations</p>
+        <p className="text-slate-600 mt-1">Manage business settings and configurations</p>
       </div>
 
-      <Link 
+      {/* Company Name Section */}
+      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm p-6" data-testid="company-name-section">
+        <div className="flex items-center gap-3 mb-4">
+          <div className="w-10 h-10 bg-sky-50 rounded-xl flex items-center justify-center">
+            <Building2 className="text-sky-600" size={20} />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold text-slate-900">Company / Shop Name</h2>
+            <p className="text-sm text-slate-500">This name appears in the sidebar and on customer messages</p>
+          </div>
+        </div>
+
+        <div className="flex flex-col sm:flex-row gap-3">
+          <input
+            type="text"
+            value={editCompanyName}
+            onChange={(e) => setEditCompanyName(e.target.value)}
+            placeholder="Enter your company name"
+            maxLength={100}
+            className="flex-1 px-4 py-3 border-2 border-slate-200 rounded-xl focus:ring-2 focus:ring-sky-100 focus:border-sky-400 transition-all"
+            data-testid="company-name-input"
+          />
+          <button
+            onClick={async () => {
+              const trimmed = editCompanyName.trim();
+              if (!trimmed) {
+                toast.error('Company name cannot be empty');
+                return;
+              }
+              try {
+                setSavingCompanyName(true);
+                await api.put(`/app-settings/company-name?company_name=${encodeURIComponent(trimmed)}`);
+                await refreshCompanyName();
+                toast.success('Company name saved!');
+              } catch (error) {
+                toast.error(error.response?.data?.detail || 'Failed to save company name');
+              } finally {
+                setSavingCompanyName(false);
+              }
+            }}
+            disabled={savingCompanyName}
+            className="px-6 py-3 bg-sky-500 text-white rounded-xl font-semibold hover:bg-sky-600 transition-all disabled:opacity-50 flex items-center gap-2"
+            data-testid="save-company-name-btn"
+          >
+            <Save size={18} />
+            {savingCompanyName ? 'Saving...' : 'Save'}
+          </button>
+          <button
+            onClick={async () => {
+              try {
+                await api.delete('/app-settings/company-name');
+                await refreshCompanyName();
+                setEditCompanyName('Thanni Canuuu');
+                toast.success('Company name reset to default');
+              } catch (error) {
+                toast.error('Failed to reset company name');
+              }
+            }}
+            className="px-4 py-3 bg-slate-100 text-slate-700 rounded-xl font-semibold hover:bg-slate-200 transition-all flex items-center gap-2"
+            data-testid="reset-company-name-btn"
+          >
+            <RotateCcw size={18} />
+            Reset
+          </button>
+        </div>
+        <p className="text-xs text-slate-500 mt-2">Default: Thanni Canuuu | Max 100 characters</p>
+      </div>
+
+      <Link
         to="/whatsapp"
         className="block bg-gradient-to-r from-emerald-500 to-green-600 text-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all"
         data-testid="whatsapp-link"
@@ -102,7 +180,7 @@ export default function Settings() {
         </div>
       </Link>
 
-      <Link 
+      <Link
         to="/shifts"
         className="block bg-gradient-to-r from-sky-500 to-blue-600 text-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all"
         data-testid="shifts-link"
@@ -121,6 +199,25 @@ export default function Settings() {
         </div>
       </Link>
 
+      <Link
+        to="/delivery-boys"
+        className="block bg-gradient-to-r from-violet-500 to-purple-600 text-white rounded-2xl p-6 shadow-lg hover:shadow-xl transition-all"
+        data-testid="delivery-boys-link"
+      >
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-4">
+            <div className="w-14 h-14 bg-white/20 rounded-xl flex items-center justify-center backdrop-blur-sm">
+              <Users className="text-white" size={28} />
+            </div>
+            <div>
+              <div className="text-xl font-bold mb-1">Delivery Boys</div>
+              <div className="text-violet-100">Add and manage delivery staff</div>
+            </div>
+          </div>
+          <ArrowRight className="text-white" size={24} />
+        </div>
+      </Link>
+
       <div className="bg-sky-50 border border-sky-200 rounded-xl p-5" data-testid="pricing-info">
         <div className="flex items-start gap-3">
           <SettingsIcon className="text-sky-600 flex-shrink-0 mt-1" size={20} />
@@ -133,23 +230,21 @@ export default function Settings() {
 
       <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
         <h2 className="text-xl font-semibold text-slate-900 mb-6">Water Can Pricing</h2>
-        
+
         <div className="space-y-4">
           {prices.map((price) => (
-            <div 
+            <div
               key={price.litre_size}
-              className={`border-2 rounded-xl p-5 transition-all ${
-                price.is_active 
-                  ? 'border-sky-200 bg-sky-50/30' 
-                  : 'border-slate-200 bg-slate-50 opacity-60'
-              }`}
+              className={`border-2 rounded-xl p-5 transition-all ${price.is_active
+                ? 'border-sky-200 bg-sky-50/30'
+                : 'border-slate-200 bg-slate-50 opacity-60'
+                }`}
               data-testid={`price-card-${price.litre_size}l`}
             >
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
-                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                    price.is_active ? 'bg-sky-500' : 'bg-slate-400'
-                  }`}>
+                  <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${price.is_active ? 'bg-sky-500' : 'bg-slate-400'
+                    }`}>
                     <Droplet className="text-white" size={24} />
                   </div>
                   <div>
@@ -157,7 +252,7 @@ export default function Settings() {
                     <div className="text-sm text-slate-600">Water Can</div>
                   </div>
                 </div>
-                
+
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"

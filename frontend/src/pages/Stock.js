@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 export default function Stock() {
   const [stock, setStock] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [newStock, setNewStock] = useState(50);
+  const [newStock, setNewStock] = useState(0);
   const [updating, setUpdating] = useState(false);
 
   useEffect(() => {
@@ -17,7 +17,7 @@ export default function Stock() {
     try {
       const response = await api.get('/stock');
       setStock(response.data);
-      setNewStock(response.data.total_stock);
+      // Removed setNewStock(response.data.total_stock) to avoid confusing "Set" vs "Add"
     } catch (error) {
       console.error('Error loading stock:', error);
       toast.error('Failed to load stock data');
@@ -34,8 +34,9 @@ export default function Stock() {
 
     try {
       setUpdating(true);
-      await api.put('/stock', { total_stock: newStock });
-      toast.success('Stock updated successfully!');
+      await api.put('/stock', { increment: newStock });
+      toast.success(`${newStock} cans added to stock successfully!`);
+      setNewStock(0); // Reset after adding
       loadStock();
     } catch (error) {
       console.error('Error updating stock:', error);
@@ -91,7 +92,7 @@ export default function Stock() {
           </div>
 
           <div className="bg-white/20 rounded-full h-3 overflow-hidden backdrop-blur-sm">
-            <div 
+            <div
               className="bg-white h-full transition-all duration-500 rounded-full"
               style={{ width: `${usagePercentage}%` }}
             />
@@ -106,8 +107,8 @@ export default function Stock() {
       </div>
 
       <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm" data-testid="update-stock-card">
-        <h2 className="text-xl font-semibold text-slate-900 mb-4">Update Total Stock</h2>
-        <p className="text-sm text-slate-600 mb-6">Set the total number of water cans available for today</p>
+        <h2 className="text-xl font-semibold text-slate-900 mb-4">Add to Daily Stock</h2>
+        <p className="text-sm text-slate-600 mb-6">Enter the number of cans to add to today's inventory</p>
 
         <div className="flex items-center justify-center gap-4 mb-6">
           <button
@@ -117,7 +118,7 @@ export default function Stock() {
           >
             <Minus size={24} className="text-slate-700" />
           </button>
-          
+
           <div className="flex-1 max-w-xs">
             <input
               type="number"
@@ -140,12 +141,12 @@ export default function Stock() {
 
         <button
           onClick={updateStock}
-          disabled={updating || newStock === stock?.total_stock}
+          disabled={updating || newStock <= 0}
           data-testid="save-stock-btn"
           className="w-full bg-sky-500 text-white py-4 rounded-xl font-semibold hover:bg-sky-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm active:scale-95"
         >
           <Save size={20} />
-          {updating ? 'Updating...' : 'Save Stock'}
+          {updating ? 'Updating...' : `Add ${newStock} Cans`}
         </button>
       </div>
 

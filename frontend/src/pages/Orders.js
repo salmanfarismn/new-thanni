@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../App';
-import { Package, TruckIcon, Filter, Search, CheckCircle, XCircle, IndianRupee } from 'lucide-react';
+import { Package, TruckIcon, Filter, Search, CheckCircle, XCircle, IndianRupee, RefreshCw, Bell } from 'lucide-react';
 import { toast } from 'sonner';
 
 export default function Orders() {
@@ -12,6 +12,9 @@ export default function Orders() {
 
   useEffect(() => {
     loadOrders();
+    // Auto-refresh every 10 seconds to catch notification status updates
+    const interval = setInterval(loadOrders, 10000);
+    return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
 
@@ -48,6 +51,17 @@ export default function Orders() {
     }
   };
 
+  const retryNotification = async (orderId) => {
+    try {
+      await api.post(`/orders/${orderId}/retry-notification`);
+      toast.success('Notification queued for retry');
+      loadOrders();
+    } catch (error) {
+      console.error('Error retrying notification:', error);
+      toast.error('Failed to retry notification');
+    }
+  };
+
   const filteredOrders = orders.filter(order => {
     const matchesSearch =
       order.customer_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -61,8 +75,8 @@ export default function Orders() {
       onClick={() => setFilter(value)}
       data-testid={`filter-${value}`}
       className={`px-4 py-2 rounded-full text-sm font-medium transition-all ${filter === value
-          ? 'bg-sky-500 text-white shadow-sm'
-          : 'bg-white text-slate-600 border border-slate-200 hover:border-sky-200'
+        ? 'bg-sky-500 text-white shadow-sm'
+        : 'bg-white text-slate-600 border border-slate-200 hover:border-sky-200'
         }`}
     >
       {label} {count !== undefined && `(${count})`}
@@ -114,8 +128,8 @@ export default function Orders() {
                 <div className="text-sm text-slate-600 mb-2">Status</div>
                 <div className="flex gap-2">
                   <span className={`px-3 py-1 rounded-full text-sm font-semibold ${order.status === 'delivered' ? 'bg-emerald-100 text-emerald-700' :
-                      order.status === 'pending' ? 'bg-amber-100 text-amber-700' :
-                        'bg-red-100 text-red-700'
+                    order.status === 'pending' ? 'bg-amber-100 text-amber-700' :
+                      'bg-red-100 text-red-700'
                     }`}>
                     {order.status.toUpperCase()}
                   </span>
@@ -124,6 +138,33 @@ export default function Orders() {
                     {order.payment_status === 'paid' ? 'PAID' : 'PAYMENT PENDING'}
                   </span>
                 </div>
+              </div>
+
+              {/* Notification Status */}
+              <div className="bg-slate-50 p-4 rounded-xl">
+                <div className="text-sm text-slate-600 mb-2">Notification Status</div>
+                <div className="flex items-center gap-2">
+                  <span className={`px-3 py-1 rounded-full text-sm font-semibold flex items-center gap-1 ${order.notification_status === 'sent' ? 'bg-emerald-100 text-emerald-700' :
+                    order.notification_status === 'failed' ? 'bg-red-100 text-red-700' :
+                      order.notification_status === 'sending' ? 'bg-blue-100 text-blue-700' :
+                        'bg-amber-100 text-amber-700'
+                    }`}>
+                    <Bell size={14} />
+                    {(order.notification_status || 'queued').toUpperCase()}
+                  </span>
+                  {order.notification_status === 'failed' && (
+                    <button
+                      onClick={() => retryNotification(order.order_id)}
+                      className="px-3 py-1 bg-sky-500 text-white rounded-full text-sm font-semibold hover:bg-sky-600 flex items-center gap-1"
+                    >
+                      <RefreshCw size={14} />
+                      Retry
+                    </button>
+                  )}
+                </div>
+                {order.last_notification_error && (
+                  <div className="text-xs text-red-600 mt-2">Error: {order.last_notification_error}</div>
+                )}
               </div>
 
               {order.status === 'pending' && (
@@ -226,8 +267,8 @@ export default function Orders() {
                   <div className="text-sm text-slate-500">{order.order_id}</div>
                 </div>
                 <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide ${order.status === 'delivered' ? 'bg-emerald-50 text-emerald-700 border border-emerald-100' :
-                    order.status === 'pending' ? 'bg-amber-50 text-amber-700 border border-amber-100' :
-                      'bg-red-50 text-red-700 border border-red-100'
+                  order.status === 'pending' ? 'bg-amber-50 text-amber-700 border border-amber-100' :
+                    'bg-red-50 text-red-700 border border-red-100'
                   }`}>
                   {order.status}
                 </span>
@@ -244,6 +285,14 @@ export default function Orders() {
                 <div className="flex items-center gap-1">
                   <TruckIcon size={14} />
                   <span>{order.delivery_staff_name}</span>
+                </div>
+                {/* Notification status indicator */}
+                <div className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${order.notification_status === 'sent' ? 'bg-emerald-100 text-emerald-700' :
+                    order.notification_status === 'failed' ? 'bg-red-100 text-red-700' :
+                      'bg-amber-100 text-amber-700'
+                  }`}>
+                  <Bell size={12} />
+                  {(order.notification_status || 'queued').charAt(0).toUpperCase() + (order.notification_status || 'queued').slice(1)}
                 </div>
               </div>
               <div className="flex items-center justify-between pt-2 border-t border-slate-100">

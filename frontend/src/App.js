@@ -1,7 +1,7 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, createContext, useContext } from 'react';
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import axios from 'axios';
-import { Droplets, Package, TruckIcon, IndianRupee, Users, Calendar, Settings as SettingsIcon, MessageSquare, Clock } from 'lucide-react';
+import { Droplets, Package, TruckIcon, Settings as SettingsIcon } from 'lucide-react';
 import '@/App.css';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
@@ -9,6 +9,7 @@ import Stock from './pages/Stock';
 import WhatsAppConnect from './pages/WhatsAppConnect';
 import Settings from './pages/Settings';
 import Shifts from './pages/Shifts';
+import DeliveryBoys from './pages/DeliveryBoys';
 
 const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 const API = `${BACKEND_URL}/api`;
@@ -16,6 +17,39 @@ const API = `${BACKEND_URL}/api`;
 export const api = axios.create({
   baseURL: API,
 });
+
+// Company Name Context
+const CompanyNameContext = createContext();
+
+export function useCompanyName() {
+  return useContext(CompanyNameContext);
+}
+
+export function CompanyNameProvider({ children }) {
+  const [companyName, setCompanyName] = useState('Thanni Canuuu');
+  const [loading, setLoading] = useState(true);
+
+  const loadCompanyName = async () => {
+    try {
+      const response = await api.get('/app-settings');
+      setCompanyName(response.data.company_name || 'Thanni Canuuu');
+    } catch (error) {
+      console.error('Error loading company name:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadCompanyName();
+  }, []);
+
+  return (
+    <CompanyNameContext.Provider value={{ companyName, setCompanyName, refreshCompanyName: loadCompanyName, loading }}>
+      {children}
+    </CompanyNameContext.Provider>
+  );
+}
 
 function BottomNav() {
   const location = useLocation();
@@ -39,8 +73,8 @@ function BottomNav() {
               to={item.path}
               data-testid={`nav-${item.label.toLowerCase()}`}
               className={`flex flex-col items-center justify-center py-2 px-3 rounded-lg transition-all ${isActive
-                  ? 'bg-sky-50 text-sky-600'
-                  : 'text-slate-600 hover:bg-slate-50'
+                ? 'bg-sky-50 text-sky-600'
+                : 'text-slate-600 hover:bg-slate-50'
                 }`}
             >
               <Icon size={20} strokeWidth={1.5} />
@@ -55,6 +89,7 @@ function BottomNav() {
 
 function Sidebar() {
   const location = useLocation();
+  const { companyName } = useCompanyName();
 
   const navItems = [
     { path: '/', icon: Package, label: 'Dashboard' },
@@ -71,7 +106,7 @@ function Sidebar() {
             <Droplets className="text-white" size={24} />
           </div>
           <div>
-            <h1 className="text-xl font-bold text-slate-900">Thanni Canuuu</h1>
+            <h1 className="text-xl font-bold text-slate-900" data-testid="company-name">{companyName}</h1>
             <p className="text-xs text-slate-500">Water Delivery</p>
           </div>
         </div>
@@ -87,8 +122,8 @@ function Sidebar() {
               to={item.path}
               data-testid={`sidebar-${item.label.toLowerCase()}`}
               className={`flex items-center gap-3 px-4 py-3 rounded-lg transition-all ${isActive
-                  ? 'bg-sky-50 text-sky-600 font-medium'
-                  : 'text-slate-600 hover:bg-slate-50'
+                ? 'bg-sky-50 text-sky-600 font-medium'
+                : 'text-slate-600 hover:bg-slate-50'
                 }`}
             >
               <Icon size={20} strokeWidth={1.5} />
@@ -119,16 +154,19 @@ function App() {
   return (
     <div className="App">
       <BrowserRouter>
-        <AppLayout>
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/orders" element={<Orders />} />
-            <Route path="/stock" element={<Stock />} />
-            <Route path="/settings" element={<Settings />} />
-            <Route path="/shifts" element={<Shifts />} />
-            <Route path="/whatsapp" element={<WhatsAppConnect />} />
-          </Routes>
-        </AppLayout>
+        <CompanyNameProvider>
+          <AppLayout>
+            <Routes>
+              <Route path="/" element={<Dashboard />} />
+              <Route path="/orders" element={<Orders />} />
+              <Route path="/stock" element={<Stock />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/shifts" element={<Shifts />} />
+              <Route path="/whatsapp" element={<WhatsAppConnect />} />
+              <Route path="/delivery-boys" element={<DeliveryBoys />} />
+            </Routes>
+          </AppLayout>
+        </CompanyNameProvider>
       </BrowserRouter>
     </div>
   );
