@@ -818,7 +818,7 @@ async def handle_whatsapp_message_legacy(message_data: IncomingMessage):
         return MessageResponse(
             reply="Sorry, something went wrong. Please try again.",
             success=False
-        )
+        ) 
 
 @api_router.get("/dashboard/metrics")
 async def get_dashboard_metrics():
