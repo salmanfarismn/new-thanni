@@ -108,7 +108,15 @@ async function initWhatsApp() {
 
 async function handleIncomingMessage(message) {
     try {
-        const phoneNumber = message.key.remoteJid.replace('@s.whatsapp.net', '');
+        const remoteJid = message.key.remoteJid;
+
+        // Ignore group messages - only process personal (1-to-1) chats
+        if (remoteJid.endsWith('@g.us')) {
+            console.log(`[Bot] Ignoring group message from: ${remoteJid}`);
+            return;
+        }
+
+        const phoneNumber = remoteJid.replace('@s.whatsapp.net', '');
         const msgContent = message.message;
 
         // Comprehensive message text extraction

@@ -178,6 +178,16 @@ async def process_notification_queue():
         # Rate limiting - wait between messages
         await asyncio.sleep(0.5)
 
+async def get_company_name() -> str:
+    """Get company name from settings or return default"""
+    try:
+        settings = await db.settings.find_one({"key": "company_name"})
+        if settings and settings.get("value"):
+            return settings["value"]
+    except Exception as e:
+        logger.warning(f"Error fetching company name: {e}")
+    return "Thanni Canuuu"
+
 async def send_order_notification(order_id: str):
     """Send WhatsApp notification for a specific order"""
     order = await db.orders.find_one({"order_id": order_id})
@@ -202,27 +212,40 @@ async def send_order_notification(order_id: str):
         if not staff:
             raise Exception("Delivery staff not found")
         
+        # Skip if delivery staff is inactive
+        if not staff.get('is_active', True):
+            logger.warning(f"Delivery staff {staff['staff_id']} is inactive, skipping notification")
+            await db.orders.update_one(
+                {"order_id": order_id},
+                {"$set": {
+                    "notification_status": "failed",
+                    "last_notification_error": "Delivery staff is inactive"
+                }}
+            )
+            return
+        
         # Get company name for branding
         company_name = await get_company_name()
         
         # Build notification message
         message = (
-            f"New Delivery Assignment from {company_name}\n\n"
+            f"🚚 New Delivery Assignment from {company_name}\n\n"
             f"*Order ID:* {order['order_id']}\n"
             f"*Shift:* {(order.get('shift_assigned') or 'N/A').upper()}\n"
             f"*Customer:* {order['customer_name']}\n"
+            f"*Phone:* {order['customer_phone']}\n"
             f"*Address:* {order['customer_address']}\n"
             f"*Can Size:* {order['litre_size']}L\n"
             f"*Quantity:* {order['quantity']} cans\n"
-            f"*Amount:* Rs.{order['amount']}\n\n"
+            f"*Amount:* ₹{order['amount']}\n\n"
             f"Please deliver ASAP!\n\n"
-            f"Reply:\n"
-            f"*DELIVERED* - Mark as delivered\n"
-            f"*PAID CASH* - Delivered & paid (cash)\n"
-            f"*PAID UPI* - Delivered & paid (UPI)"
+            f"*After delivery, reply with:*\n"
+            f"*1* - Delivered (payment pending)\n"
+            f"*2* - Delivered & Paid (Cash)\n"
+            f"*3* - Delivered & Paid (UPI)"
         )
         
-        # Send message
+        # Send message to delivery boy
         result = await send_whatsapp_message(staff['phone_number'], message)
         
         if result.get('success'):
@@ -251,12 +274,34 @@ async def send_order_notification(order_id: str):
         )
         logger.error(f"Failed to send notification for order {order_id}: {error_msg}")
 
+def normalize_phone_number(phone_number: str) -> str:
+    """Normalize phone number to include country code (91 for India)"""
+    # Remove any non-digit characters
+    digits_only = ''.join(filter(str.isdigit, phone_number))
+    
+    # If number starts with 0, remove it
+    if digits_only.startswith('0'):
+        digits_only = digits_only[1:]
+    
+    # If it's a 10-digit Indian number, add country code
+    if len(digits_only) == 10:
+        digits_only = '91' + digits_only
+    
+    # If it starts with +91, it's already normalized (just remove the +)
+    # The digits_only already handles this case
+    
+    return digits_only
+
 async def send_whatsapp_message(phone_number: str, message: str):
     """Send WhatsApp message using available method (Cloud API or Baileys)"""
     try:
+        # Normalize phone number to include country code
+        normalized_phone = normalize_phone_number(phone_number)
+        logger.info(f"Sending WhatsApp message to {normalized_phone}")
+        
         # Try Cloud API first if configured
         if whatsapp_api.phone_number_id and whatsapp_api.access_token:
-            result = await whatsapp_api.send_text_message(phone_number, message)
+            result = await whatsapp_api.send_text_message(normalized_phone, message)
             if result.get('success'):
                 return result
         
@@ -264,7 +309,7 @@ async def send_whatsapp_message(phone_number: str, message: str):
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{WHATSAPP_SERVICE_URL}/send",
-                json={"phone_number": phone_number, "message": message},
+                json={"phone_number": normalized_phone, "message": message},
                 timeout=10.0
             )
             return response.json()
@@ -275,9 +320,12 @@ async def send_whatsapp_message(phone_number: str, message: str):
 async def send_whatsapp_buttons(phone_number: str, body_text: str, buttons: list, header: str = None):
     """Send WhatsApp buttons using available method"""
     try:
+        # Normalize phone number to include country code
+        normalized_phone = normalize_phone_number(phone_number)
+        
         # Try Cloud API first if configured
         if whatsapp_api.phone_number_id and whatsapp_api.access_token:
-            result = await whatsapp_api.send_interactive_buttons(phone_number, body_text, buttons, header=header)
+            result = await whatsapp_api.send_interactive_buttons(normalized_phone, body_text, buttons, header=header)
             if result.get('success'):
                 return result
         
@@ -289,7 +337,7 @@ async def send_whatsapp_buttons(phone_number: str, body_text: str, buttons: list
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 f"{WHATSAPP_SERVICE_URL}/send",
-                json={"phone_number": phone_number, "message": button_text},
+                json={"phone_number": normalized_phone, "message": button_text},
                 timeout=10.0
             )
             return response.json()
@@ -651,8 +699,8 @@ async def handle_delivery_boy_message(phone_number: str, message_text: str, deli
         
         order = pending_orders[0]
         
-        # Handle "Delivered" button
-        if 'delivered' in message_text or message_text == 'delivered_btn':
+        # Handle "1" - Delivered (payment pending)
+        if message_text == '1' or 'delivered' in message_text or message_text == 'delivered_btn':
             if order['status'] == 'pending':
                 await db.orders.update_one(
                     {"order_id": order['order_id']},
@@ -667,15 +715,9 @@ async def handle_delivery_boy_message(phone_number: str, message_text: str, deli
                     {"$inc": {"active_orders_count": -1}}
                 )
                 
-                # Ask for payment status
-                await send_whatsapp_buttons(
+                await send_whatsapp_message(
                     phone_number,
-                    f"✅ Order {order['order_id']} marked as DELIVERED!\n\nAmount to collect: ₹{order['amount']}\n\nPayment received?",
-                    [
-                        {"id": "paid_cash", "title": "💵 Paid - Cash"},
-                        {"id": "paid_upi", "title": "📱 Paid - UPI"},
-                        {"id": "not_paid", "title": "⏳ Not Paid"}
-                    ]
+                    f"✅ Order {order['order_id']} marked as DELIVERED!\n\nAmount to collect: ₹{order['amount']}\n\n⏳ Payment status: Pending\n\nRemember to collect payment from customer."
                 )
             else:
                 await send_whatsapp_message(
@@ -683,8 +725,23 @@ async def handle_delivery_boy_message(phone_number: str, message_text: str, deli
                     f"Order {order['order_id']} already marked as delivered."
                 )
         
-        # Handle payment buttons
-        elif message_text in ['paid_cash', 'paid cash', 'cash']:
+        # Handle "2" - Delivered & Paid (Cash)
+        elif message_text == '2' or message_text in ['paid_cash', 'paid cash', 'cash']:
+            # Mark as delivered if not already
+            if order['status'] == 'pending':
+                await db.orders.update_one(
+                    {"order_id": order['order_id']},
+                    {"$set": {
+                        "status": "delivered",
+                        "delivered_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                await db.delivery_staff.update_one(
+                    {"staff_id": delivery_person['staff_id']},
+                    {"$inc": {"active_orders_count": -1}}
+                )
+            
+            # Update payment status
             await db.orders.update_one(
                 {"order_id": order['order_id']},
                 {"$set": {
@@ -694,10 +751,26 @@ async def handle_delivery_boy_message(phone_number: str, message_text: str, deli
             )
             await send_whatsapp_message(
                 phone_number,
-                f"✅ Payment recorded!\n\nOrder {order['order_id']}\nAmount: ₹{order['amount']}\nMethod: Cash\n\nGreat work! 👍"
+                f"✅ Order Complete!\n\nOrder: {order['order_id']}\nAmount: ₹{order['amount']}\nPayment: Cash ✓\n\nGreat work! 👍"
             )
         
-        elif message_text in ['paid_upi', 'paid upi', 'upi']:
+        # Handle "3" - Delivered & Paid (UPI)
+        elif message_text == '3' or message_text in ['paid_upi', 'paid upi', 'upi']:
+            # Mark as delivered if not already
+            if order['status'] == 'pending':
+                await db.orders.update_one(
+                    {"order_id": order['order_id']},
+                    {"$set": {
+                        "status": "delivered",
+                        "delivered_at": datetime.now(timezone.utc).isoformat()
+                    }}
+                )
+                await db.delivery_staff.update_one(
+                    {"staff_id": delivery_person['staff_id']},
+                    {"$inc": {"active_orders_count": -1}}
+                )
+            
+            # Update payment status
             await db.orders.update_one(
                 {"order_id": order['order_id']},
                 {"$set": {
@@ -707,7 +780,7 @@ async def handle_delivery_boy_message(phone_number: str, message_text: str, deli
             )
             await send_whatsapp_message(
                 phone_number,
-                f"✅ Payment recorded!\n\nOrder {order['order_id']}\nAmount: ₹{order['amount']}\nMethod: UPI\n\nGreat work! 👍"
+                f"✅ Order Complete!\n\nOrder: {order['order_id']}\nAmount: ₹{order['amount']}\nPayment: UPI ✓\n\nGreat work! 👍"
             )
         
         elif message_text in ['not_paid', 'not paid', 'pending']:
@@ -719,7 +792,7 @@ async def handle_delivery_boy_message(phone_number: str, message_text: str, deli
         else:
             await send_whatsapp_message(
                 phone_number,
-                f"Current Order: {order['order_id']}\n\nPlease update status:\n• Send 'DELIVERED' when done\n• Or use the buttons sent earlier"
+                f"📦 Current Order: {order['order_id']}\n\n*Reply with:*\n*1* - Delivered (payment pending)\n*2* - Delivered & Paid (Cash)\n*3* - Delivered & Paid (UPI)"
             )
     
     except Exception as e:
