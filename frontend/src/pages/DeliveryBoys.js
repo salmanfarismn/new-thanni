@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api } from '../App';
+import { api } from '../context/AppContext';
 import { Users, Plus, Trash2, Power, Phone, User, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -208,8 +208,8 @@ export default function DeliveryBoys() {
                         <div
                             key={person.staff_id}
                             className={`bg-white p-5 rounded-xl border-2 transition-all ${person.is_active !== false
-                                    ? 'border-slate-200 hover:border-sky-200'
-                                    : 'border-slate-200 bg-slate-50 opacity-70'
+                                ? 'border-slate-200 hover:border-sky-200'
+                                : 'border-slate-200 bg-slate-50 opacity-70'
                                 }`}
                             data-testid={`staff-card-${person.staff_id}`}
                         >
@@ -230,8 +230,8 @@ export default function DeliveryBoys() {
 
                                 <div className="flex items-center gap-3">
                                     <span className={`px-3 py-1 rounded-full text-xs font-semibold ${person.is_active !== false
-                                            ? 'bg-emerald-100 text-emerald-700'
-                                            : 'bg-slate-200 text-slate-600'
+                                        ? 'bg-emerald-100 text-emerald-700'
+                                        : 'bg-slate-200 text-slate-600'
                                         }`}>
                                         {person.is_active !== false ? 'Active' : 'Inactive'}
                                     </span>
@@ -246,8 +246,8 @@ export default function DeliveryBoys() {
                                         onClick={() => toggleStatus(person.staff_id, person.is_active !== false)}
                                         data-testid={`toggle-${person.staff_id}`}
                                         className={`p-2 rounded-lg transition-all ${person.is_active !== false
-                                                ? 'bg-amber-100 text-amber-600 hover:bg-amber-200'
-                                                : 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'
+                                            ? 'bg-amber-100 text-amber-600 hover:bg-amber-200'
+                                            : 'bg-emerald-100 text-emerald-600 hover:bg-emerald-200'
                                             }`}
                                         title={person.is_active !== false ? 'Deactivate' : 'Activate'}
                                     >

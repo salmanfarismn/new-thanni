@@ -1,7 +1,10 @@
 import { useState, useEffect } from 'react';
-import { api } from '../App';
-import { Package, TruckIcon, IndianRupee, Droplets, CheckCircle, Clock, AlertCircle, Calendar, Filter } from 'lucide-react';
+import { api } from '../context/AppContext';
+import { Package, TruckIcon, IndianRupee, Droplets, CheckCircle, Clock, AlertCircle, Calendar, Filter, TrendingUp, Users, ArrowUpRight } from 'lucide-react';
 import { toast } from 'sonner';
+import Card, { GlassCard } from '../components/ui/card';
+import Button from '../components/ui/button';
+import Badge from '../components/ui/badge';
 
 export default function Dashboard() {
   const [metrics, setMetrics] = useState(null);
@@ -93,296 +96,254 @@ export default function Dashboard() {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen" data-testid="loading-spinner">
+      <div className="flex items-center justify-center min-h-[60vh]" data-testid="loading-spinner">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-sky-500"></div>
       </div>
     );
   }
 
-  const MetricCard = ({ icon: Icon, label, value, subtitle, color = 'sky' }) => (
-    <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm hover:shadow-md transition-shadow" data-testid={`metric-card-${label.toLowerCase().replace(/\s/g, '-')}`}>
-      <div className="flex items-start justify-between mb-3">
-        <div className={`w-10 h-10 bg-${color}-50 rounded-xl flex items-center justify-center`}>
-          <Icon className={`text-${color}-600`} size={20} strokeWidth={1.5} />
+  // --- Sub-components ---
+
+  const MetricCard = ({ icon: Icon, label, value, subtitle, color = 'sky', trend }) => (
+    <Card className="hover:scale-[1.02] transition-transform duration-300" data-testid={`metric-card-${label.toLowerCase().replace(/\s/g, '-')}`}>
+      <div className="flex items-start justify-between mb-4">
+        <div className={`p-3 rounded-2xl bg-${color}-50 text-${color}-600`}>
+          <Icon size={24} strokeWidth={2} />
         </div>
+        {trend && (
+          <div className="flex items-center gap-1 text-xs font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-full">
+            <TrendingUp size={12} />
+            {trend}
+          </div>
+        )}
       </div>
-      <div className="text-3xl font-bold text-slate-900 mb-1">{value}</div>
-      <div className="text-sm text-slate-600 font-medium">{label}</div>
-      {subtitle && <div className="text-xs text-slate-500 mt-1">{subtitle}</div>}
-    </div>
+      <div>
+        <div className="text-3xl font-black text-slate-900 tracking-tight">{value}</div>
+        <div className="text-sm font-medium text-slate-500 mt-1">{label}</div>
+        {subtitle && <div className="text-xs text-slate-400 mt-2">{subtitle}</div>}
+      </div>
+    </Card>
   );
 
-  const StockCard = () => (
-    <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-xl relative overflow-hidden" data-testid="stock-card">
+  const StockWidget = () => (
+    <div className="relative overflow-hidden bg-slate-900 rounded-3xl p-8 text-white shadow-2xl" data-testid="stock-card">
+      {/* Background Decor */}
+      <div className="absolute top-0 right-0 w-64 h-64 bg-sky-500/20 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+      <div className="absolute bottom-0 left-0 w-32 h-32 bg-blue-600/20 rounded-full blur-2xl translate-y-1/2 -translate-x-1/2"></div>
+
       <div className="relative z-10">
-        <div className="flex items-start justify-between mb-4">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-white/10 rounded-xl flex items-center justify-center backdrop-blur-sm">
-              <Droplets className="text-sky-400" size={24} />
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <div className="flex items-center gap-2 text-sky-400 mb-1">
+              <Droplets size={20} />
+              <span className="text-sm font-bold tracking-wider uppercase">Live Inventory</span>
             </div>
-            <div>
-              <div className="text-sm text-slate-400">Available Stock</div>
-              <div className="text-4xl font-bold mt-1">{metrics?.available_stock || 0}</div>
-            </div>
+            <h3 className="text-4xl font-black mt-2">{metrics?.available_stock || 0}</h3>
+            <p className="text-slate-400 text-sm">Cans available for delivery</p>
+          </div>
+          <div className="w-16 h-16 rounded-2xl bg-white/10 backdrop-blur-md flex items-center justify-center border border-white/10">
+            <span className="text-2xl font-bold">{Math.round(((metrics?.available_stock || 0) / (metrics?.total_stock || 1)) * 100)}%</span>
           </div>
         </div>
-        <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
+
+        {/* Progress Bar */}
+        <div className="h-4 bg-slate-800 rounded-full overflow-hidden border border-slate-700/50">
           <div
-            className="h-full bg-gradient-to-r from-sky-400 to-blue-500 transition-all duration-500"
+            className="h-full bg-gradient-to-r from-sky-400 via-blue-500 to-indigo-600 shadow-[0_0_15px_rgba(56,189,248,0.5)] transition-all duration-1000 ease-out"
             style={{ width: `${((metrics?.available_stock || 0) / (metrics?.total_stock || 1)) * 100}%` }}
           />
         </div>
-        <div className="flex justify-between mt-2 text-sm text-slate-400">
-          <span>Out of {metrics?.total_stock || 0} cans</span>
-          <span>{Math.round(((metrics?.available_stock || 0) / (metrics?.total_stock || 1)) * 100)}%</span>
+
+        <div className="flex justify-between mt-3 text-sm font-medium text-slate-400">
+          <span>0</span>
+          <span>Capacity: {metrics?.total_stock || 0}</span>
         </div>
       </div>
-      <div className="absolute top-0 right-0 w-32 h-32 bg-sky-500/10 rounded-full blur-3xl" />
     </div>
   );
 
-  const OrderCard = ({ order }) => {
-    const statusColors = {
-      pending: 'amber',
-      delivered: 'emerald',
-      cancelled: 'red'
+  const OrderListItem = ({ order }) => {
+    const statusConfig = {
+      pending: { color: 'amber', icon: Clock },
+      delivered: { color: 'emerald', icon: CheckCircle },
+      cancelled: { color: 'red', icon: AlertCircle }
     };
-    const color = statusColors[order.status] || 'slate';
+    const config = statusConfig[order.status] || { color: 'slate', icon: Package };
+    const StatusIcon = config.icon;
 
     return (
-      <div className="bg-white p-4 rounded-xl border border-slate-100 shadow-sm hover:border-sky-200 transition-colors group" data-testid={`order-card-${order.order_id}`}>
-        <div className="flex items-start justify-between mb-3">
+      <div className="group flex items-center justify-between p-4 bg-slate-50/50 hover:bg-white border boundary-transparent hover:border-slate-100 rounded-2xl transition-all duration-200" data-testid={`order-card-${order.order_id}`}>
+        <div className="flex items-center gap-4">
+          <div className={`w-12 h-12 rounded-xl flex items-center justify-center bg-white shadow-sm group-hover:shadow-md transition-shadow text-${config.color}-500`}>
+            <Package size={20} />
+          </div>
           <div>
-            <div className="font-semibold text-slate-900">{order.customer_name}</div>
-            <div className="text-sm text-slate-500">{order.order_id}</div>
-          </div>
-          <span className={`bg-${color}-50 text-${color}-700 border border-${color}-100 px-2.5 py-0.5 rounded-full text-xs font-semibold uppercase tracking-wide`}>
-            {order.status}
-          </span>
-        </div>
-        <div className="text-sm text-slate-600 mb-2">
-          <div className="flex items-center gap-2 mb-1">
-            <Package size={14} />
-            <span>{order.quantity} cans × ₹{order.price_per_can} = ₹{order.amount}</span>
-          </div>
-          <div className="flex items-center gap-2">
-            <TruckIcon size={14} />
-            <span>{order.delivery_staff_name}</span>
+            <div className="font-bold text-slate-900">{order.customer_name}</div>
+            <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5">
+              <span className="font-mono bg-slate-100 px-1.5 py-0.5 rounded">{order.order_id}</span>
+              <span>•</span>
+              <span>{order.quantity} cans (₹{order.amount})</span>
+            </div>
           </div>
         </div>
-        <div className="flex items-center justify-between pt-2 border-t border-slate-100">
-          <span className={`text-xs font-medium ${order.payment_status === 'paid' ? 'text-emerald-600' : 'text-amber-600'
-            }`}>
-            {order.payment_status === 'paid' ? '✓ Paid' : '○ Pending Payment'}
-          </span>
-          <span className="text-xs text-slate-500">
-            {new Date(order.created_at).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
-          </span>
-        </div>
-      </div>
-    );
-  };
 
-  const StaffSection = ({ staffMember }) => {
-    const staffOrders = orders.filter(o => o.delivery_staff_id === staffMember.staff_id);
-    return (
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden" data-testid={`staff-section-${staffMember.staff_id}`}>
-        <div className="bg-slate-50 px-4 py-3 border-b border-slate-200">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-sky-100 rounded-full flex items-center justify-center">
-                <TruckIcon className="text-sky-600" size={18} />
-              </div>
-              <div>
-                <div className="font-semibold text-slate-900">{staffMember.name}</div>
-                <div className="text-xs text-slate-500">{staffOrders.length} orders today</div>
-              </div>
-            </div>
-            <div className="text-right">
-              <div className="text-sm font-semibold text-sky-600">{staffMember.active_orders_count}</div>
-              <div className="text-xs text-slate-500">Active</div>
-            </div>
+        <div className="text-right">
+          <Badge variant={order.status === 'delivered' ? 'success' : order.status === 'pending' ? 'warning' : 'error'}>
+            {order.status}
+          </Badge>
+          <div className="text-xs text-slate-400 mt-1.5">
+            {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </div>
-        </div>
-        <div className="p-4 space-y-3">
-          {staffOrders.length > 0 ? (
-            staffOrders.slice(0, 3).map(order => <OrderCard key={order.order_id} order={order} />)
-          ) : (
-            <div className="text-center py-6 text-slate-500 text-sm">No orders yet</div>
-          )}
         </div>
       </div>
     );
   };
 
   return (
-    <div className="space-y-6" data-testid="dashboard-page">
-      <div className="flex items-center justify-between">
+    <div className="space-y-8 animate-fade-in" data-testid="dashboard-page">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Dashboard</h1>
-          <p className="text-slate-600 mt-1">Today's Overview</p>
+          <h1 className="text-4xl font-black text-slate-900 tracking-tight">Dashboard</h1>
+          <p className="text-slate-500 font-medium mt-1">Overview of your water delivery business</p>
+        </div>
+        <div className="flex items-center gap-2 text-sm font-medium text-slate-500 bg-white px-4 py-2 rounded-full shadow-sm border border-slate-100">
+          <Calendar size={16} />
+          {new Date().toLocaleDateString(undefined, { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
         </div>
       </div>
 
-      <StockCard />
+      {/* Main Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-        <MetricCard icon={Package} label="Total Orders" value={metrics?.total_orders || 0} />
-        <MetricCard icon={CheckCircle} label="Delivered" value={metrics?.delivered_orders || 0} color="emerald" />
-        <MetricCard icon={Clock} label="Pending" value={metrics?.pending_orders || 0} color="amber" />
-        <MetricCard icon={Droplets} label="Cans Sold" value={metrics?.total_cans || 0} />
-      </div>
+        {/* Left Column: Stats & Stock (Span 2) */}
+        <div className="lg:col-span-2 space-y-6">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            <MetricCard icon={Package} label="Total Orders" value={metrics?.total_orders || 0} />
+            <MetricCard icon={CheckCircle} label="Delivered" value={metrics?.delivered_orders || 0} color="emerald" />
+            <MetricCard icon={Clock} label="Pending" value={metrics?.pending_orders || 0} color="amber" />
+            <MetricCard icon={Droplets} label="Cans Sold" value={metrics?.total_cans || 0} color="blue" />
+          </div>
 
-      {/* Sales Filter Section */}
-      <div className="bg-white rounded-2xl border border-slate-100 shadow-sm overflow-hidden" data-testid="sales-filter-section">
-        <div className="p-5 border-b border-slate-100">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
-              <Filter size={18} className="text-slate-500" />
-              <span className="font-semibold text-slate-900">Sales Report</span>
+          <StockWidget />
+
+          {/* Sales Section */}
+          <Card className="overflow-hidden">
+            <div className="flex flex-wrap items-center justify-between mb-6 gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-violet-50 text-violet-600 rounded-xl">
+                  <TrendingUp size={20} />
+                </div>
+                <div>
+                  <h3 className="text-lg font-bold text-slate-900">Sales Report</h3>
+                  <div className="text-xs text-slate-500">Revenue and order analytics</div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <select
+                  value={salesFilter}
+                  onChange={(e) => setSalesFilter(e.target.value)}
+                  className="pl-3 pr-8 py-2 bg-slate-50 border-none rounded-xl text-sm font-medium text-slate-700 focus:ring-2 focus:ring-sky-100 cursor-pointer"
+                  data-testid="sales-filter-select"
+                >
+                  <option value="today">Today</option>
+                  <option value="week">This Week</option>
+                  <option value="month">This Month</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </div>
             </div>
 
-            <select
-              value={salesFilter}
-              onChange={(e) => setSalesFilter(e.target.value)}
-              className="px-4 py-2 border-2 border-slate-200 rounded-lg text-sm font-medium focus:border-sky-400 focus:ring-2 focus:ring-sky-100 transition-all"
-              data-testid="sales-filter-select"
-            >
-              <option value="today">Today</option>
-              <option value="week">This Week</option>
-              <option value="month">This Month</option>
-              <option value="custom">Custom Range</option>
-            </select>
-
+            {/* Custom Date Inputs */}
             {salesFilter === 'custom' && (
-              <div className="flex items-center gap-2">
-                <input
-                  type="date"
-                  value={customStartDate}
-                  onChange={(e) => setCustomStartDate(e.target.value)}
-                  className="px-3 py-2 border-2 border-slate-200 rounded-lg text-sm focus:border-sky-400"
-                  data-testid="custom-start-date"
-                />
+              <div className="flex items-center gap-3 mb-6 p-4 bg-slate-50 rounded-2xl">
+                <input type="date" value={customStartDate} onChange={(e) => setCustomStartDate(e.target.value)} className="bg-white border-0 rounded-lg shadow-sm text-sm px-3 py-2" />
                 <span className="text-slate-400">to</span>
-                <input
-                  type="date"
-                  value={customEndDate}
-                  onChange={(e) => setCustomEndDate(e.target.value)}
-                  className="px-3 py-2 border-2 border-slate-200 rounded-lg text-sm focus:border-sky-400"
-                  data-testid="custom-end-date"
-                />
+                <input type="date" value={customEndDate} onChange={(e) => setCustomEndDate(e.target.value)} className="bg-white border-0 rounded-lg shadow-sm text-sm px-3 py-2" />
               </div>
             )}
-          </div>
 
-          {salesData && (
-            <div className="text-xs text-slate-500 mt-2 flex items-center gap-1">
-              <Calendar size={12} />
-              {salesData.start_date === salesData.end_date
-                ? salesData.start_date
-                : `${salesData.start_date} to ${salesData.end_date}`
-              }
-            </div>
-          )}
+            {salesLoading ? (
+              <div className="py-12 flex justify-center"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-violet-500"></div></div>
+            ) : salesData ? (
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-5 bg-violet-50/50 rounded-2xl border border-violet-100">
+                  <div className="text-sm text-violet-600 font-medium mb-1">Total Revenue</div>
+                  <div className="text-3xl font-black text-violet-700">₹{salesData.total_revenue}</div>
+                </div>
+                <div className="p-5 bg-amber-50/50 rounded-2xl border border-amber-100">
+                  <div className="text-sm text-amber-600 font-medium mb-1">Pending Payment</div>
+                  <div className="text-3xl font-black text-amber-700">₹{salesData.pending_payment_orders}</div>
+                </div>
+                <div className="col-span-2 grid grid-cols-4 gap-2 pt-2">
+                  <div className="text-center p-3 bg-slate-50 rounded-xl">
+                    <div className="text-lg font-bold text-slate-700">{salesData.total_orders}</div>
+                    <div className="text-[10px] uppercase font-bold text-slate-400">Orders</div>
+                  </div>
+                  <div className="text-center p-3 bg-slate-50 rounded-xl">
+                    <div className="text-lg font-bold text-slate-700">{salesData.total_cans_sold}</div>
+                    <div className="text-[10px] uppercase font-bold text-slate-400">Cans</div>
+                  </div>
+                  <div className="text-center p-3 bg-slate-50 rounded-xl">
+                    <div className="text-lg font-bold text-slate-700">{salesData.paid_orders}</div>
+                    <div className="text-[10px] uppercase font-bold text-emerald-500">Paid</div>
+                  </div>
+                  <div className="text-center p-3 bg-slate-50 rounded-xl">
+                    <div className="text-lg font-bold text-slate-700">{salesData.pending_payment_orders}</div>
+                    <div className="text-[10px] uppercase font-bold text-amber-500">Unpaid</div>
+                  </div>
+                </div>
+              </div>
+            ) : <div className="text-center py-8 text-slate-400">No data available</div>}
+          </Card>
         </div>
 
-        <div className="p-5">
-          {salesLoading ? (
-            <div className="flex items-center justify-center py-8">
-              <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-sky-500"></div>
+        {/* Right Column: Staff & Recent (Span 1) */}
+        <div className="space-y-6">
+          {/* Staff Status */}
+          <Card>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-slate-900">Delivery Team</h3>
+              <Badge variant="info">{staff.filter(s => s.active_orders_count > 0).length} Active</Badge>
             </div>
-          ) : salesData ? (
-            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-              <div className="bg-sky-50 p-4 rounded-xl">
-                <div className="text-2xl font-bold text-sky-700">{salesData.total_orders}</div>
-                <div className="text-sm text-sky-600">Total Orders</div>
-              </div>
-              <div className="bg-emerald-50 p-4 rounded-xl">
-                <div className="text-2xl font-bold text-emerald-700">{salesData.total_cans_sold}</div>
-                <div className="text-sm text-emerald-600">Cans Sold</div>
-              </div>
-              <div className="bg-violet-50 p-4 rounded-xl">
-                <div className="text-2xl font-bold text-violet-700">₹{salesData.total_revenue}</div>
-                <div className="text-sm text-violet-600">Revenue (Paid)</div>
-              </div>
-              <div className="bg-amber-50 p-4 rounded-xl">
-                <div className="text-2xl font-bold text-amber-700">₹{salesData.total_order_value}</div>
-                <div className="text-sm text-amber-600">Total Order Value</div>
-              </div>
+            <div className="space-y-3">
+              {staff.slice(0, 4).map(s => (
+                <div key={s.staff_id} className="flex items-center justify-between p-3 bg-slate-50 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <div className="w-8 h-8 rounded-full bg-white border border-slate-200 flex items-center justify-center text-xs font-bold text-slate-600">
+                      {s.name.substring(0, 2).toUpperCase()}
+                    </div>
+                    <span className="font-medium text-sm text-slate-700">{s.name}</span>
+                  </div>
+                  <div className="text-xs font-semibold text-slate-400">{s.active_orders_count} orders</div>
+                </div>
+              ))}
+              {staff.length === 0 && <div className="text-sm text-slate-400 text-center py-2">No active staff</div>}
             </div>
-          ) : (
-            <div className="text-center text-slate-500 py-8">
-              {salesFilter === 'custom' && (!customStartDate || !customEndDate)
-                ? 'Select start and end dates'
-                : 'No sales data available'
-              }
-            </div>
-          )}
+            <Button variant="ghost" className="w-full mt-4 text-sm" size="sm">View All Team <ArrowUpRight size={14} /></Button>
+          </Card>
 
-          {salesData && salesData.total_orders > 0 && (
-            <div className="mt-4 pt-4 border-t border-slate-100 grid grid-cols-2 md:grid-cols-4 gap-4 text-center text-sm">
-              <div>
-                <span className="text-emerald-600 font-semibold">{salesData.delivered_orders}</span>
-                <span className="text-slate-500 ml-1">Delivered</span>
+          {/* Financials Summary */}
+          <div className="grid grid-cols-1 gap-4">
+            <div className="p-5 bg-gradient-to-br from-white to-slate-50 rounded-3xl border border-slate-200 shadow-sm">
+              <div className="flex items-center gap-3 mb-2 text-slate-500">
+                <IndianRupee size={18} />
+                <span className="text-sm font-medium">Total Revenue</span>
               </div>
-              <div>
-                <span className="text-amber-600 font-semibold">{salesData.pending_orders}</span>
-                <span className="text-slate-500 ml-1">Pending</span>
+              <div className="text-2xl font-black text-slate-900">₹{metrics?.total_revenue || 0}</div>
+            </div>
+            <div className="p-5 bg-white rounded-3xl border border-amber-100 shadow-sm relative overflow-hidden">
+              <div className="absolute right-0 top-0 w-24 h-24 bg-amber-500/10 rounded-full -translate-y-1/2 translate-x-1/2"></div>
+              <div className="flex items-center gap-3 mb-2 text-amber-600 relative z-10">
+                <AlertCircle size={18} />
+                <span className="text-sm font-bold">Outstanding</span>
               </div>
-              <div>
-                <span className="text-emerald-600 font-semibold">{salesData.paid_orders}</span>
-                <span className="text-slate-500 ml-1">Paid</span>
-              </div>
-              <div>
-                <span className="text-amber-600 font-semibold">{salesData.pending_payment_orders}</span>
-                <span className="text-slate-500 ml-1">Payment Pending</span>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm" data-testid="revenue-card">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 bg-emerald-50 rounded-xl flex items-center justify-center">
-              <IndianRupee className="text-emerald-600" size={20} />
-            </div>
-            <div>
-              <div className="text-sm text-slate-600">Total Revenue</div>
-              <div className="text-2xl font-bold text-slate-900">₹{metrics?.total_revenue || 0}</div>
-            </div>
-          </div>
-        </div>
-        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm" data-testid="pending-payment-card">
-          <div className="flex items-center gap-3 mb-3">
-            <div className="w-10 h-10 bg-amber-50 rounded-xl flex items-center justify-center">
-              <AlertCircle className="text-amber-600" size={20} />
-            </div>
-            <div>
-              <div className="text-sm text-slate-600">Pending Payment</div>
-              <div className="text-2xl font-bold text-slate-900">₹{metrics?.pending_payment || 0}</div>
+              <div className="text-2xl font-black text-slate-900 relative z-10">₹{metrics?.pending_payment || 0}</div>
             </div>
           </div>
         </div>
       </div>
-
-      {staff.length > 0 && (
-        <div className="space-y-4">
-          <h2 className="text-xl font-semibold text-slate-900">Delivery Staff</h2>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {staff.map(s => <StaffSection key={s.staff_id} staffMember={s} />)}
-          </div>
-        </div>
-      )}
-
-      {orders.length === 0 && (
-        <div className="bg-white rounded-2xl p-12 text-center border border-slate-200" data-testid="no-orders-message">
-          <Package className="mx-auto text-slate-300 mb-4" size={48} />
-          <h3 className="text-lg font-semibold text-slate-900 mb-2">No orders yet today</h3>
-          <p className="text-slate-600">Orders will appear here once customers start ordering via WhatsApp</p>
-        </div>
-      )}
     </div>
   );
 }

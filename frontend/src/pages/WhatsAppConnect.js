@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api } from '../App';
+import { api } from '../context/AppContext';
 import { CheckCircle, QrCode, AlertCircle, LogOut, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
 import { toast } from 'sonner';
 

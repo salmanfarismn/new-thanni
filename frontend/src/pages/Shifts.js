@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { api } from '../App';
+import { api } from '../context/AppContext';
 import { Clock, Users, Sun, Moon, Calendar, Save } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -86,8 +86,8 @@ export default function Shifts() {
         onClick={() => updateStaffShift(staffId, staffName, value)}
         data-testid={`shift-btn-${staffId}-${value}`}
         className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${isSelected
-            ? `bg-${color}-500 text-white shadow-md`
-            : `bg-${color}-50 text-${color}-700 hover:bg-${color}-100 border border-${color}-200`
+          ? `bg-${color}-500 text-white shadow-md`
+          : `bg-${color}-50 text-${color}-700 hover:bg-${color}-100 border border-${color}-200`
           }`}
       >
         <div className="flex flex-col items-center gap-1">
@@ -202,8 +202,8 @@ export default function Shifts() {
                       onClick={() => updateStaffShift(person.staff_id, person.name, 'none')}
                       data-testid={`shift-btn-${person.staff_id}-none`}
                       className={`py-3 px-4 rounded-lg font-medium transition-all ${currentShift.shift === 'none' || !currentShift.is_active
-                          ? 'bg-slate-500 text-white shadow-md'
-                          : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200'
+                        ? 'bg-slate-500 text-white shadow-md'
+                        : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200'
                         }`}
                     >
                       <div className="flex flex-col items-center gap-1">
