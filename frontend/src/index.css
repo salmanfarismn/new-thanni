@@ -13,6 +13,24 @@ body {
 }
 
 @layer utilities {
+    .animate-wave-slow {
+        animation: wave-rotate 10s linear infinite;
+    }
+
+    .animate-wave-slower {
+        animation: wave-rotate 15s linear infinite;
+    }
+
+    @keyframes wave-rotate {
+        from {
+            transform: rotate(0deg);
+        }
+
+        to {
+            transform: rotate(360deg);
+        }
+    }
+
     .glass {
         @apply bg-white/80 backdrop-blur-xl border border-white/40 shadow-glass;
     }

@@ -1,13 +1,16 @@
 import { useState, useEffect } from 'react';
 import { api } from '../context/AppContext';
-import { CheckCircle, QrCode, AlertCircle, LogOut, RefreshCw, ChevronDown, ChevronUp } from 'lucide-react';
+import { CheckCircle, QrCode, AlertCircle, LogOut, RefreshCw, Smartphone, Menu, Scan, Activity, HelpCircle, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
+import Card from '../components/ui/card';
+import Badge from '../components/ui/badge';
+import Button from '../components/ui/button';
 
 export default function WhatsAppConnect() {
   const [status, setStatus] = useState({ connected: false });
   const [qrCode, setQrCode] = useState(null);
   const [loading, setLoading] = useState(true);
-  const [showMoreInfo, setShowMoreInfo] = useState(false);
+  const [disconnecting, setDisconnecting] = useState(false);
 
   useEffect(() => {
     checkStatus();
@@ -47,9 +50,10 @@ export default function WhatsAppConnect() {
   };
 
   const handleDisconnect = async () => {
-    if (!window.confirm('Stop WhatsApp automation? You can reconnect anytime.')) return;
+    if (!window.confirm('Are you sure you want to disconnect? The bot will stop replying to customers.')) return;
 
     try {
+      setDisconnecting(true);
       const response = await api.post('/whatsapp/disconnect');
       if (response.data.success) {
         toast.success('WhatsApp disconnected');
@@ -58,183 +62,218 @@ export default function WhatsAppConnect() {
       }
     } catch (error) {
       toast.error('Failed to disconnect');
+    } finally {
+      setDisconnecting(false);
     }
   };
 
   const handleRefresh = async () => {
+    setQrCode(null);
     await checkStatus();
     if (!status.connected) {
       await fetchQR();
     }
-    toast.success('Status refreshed');
+    toast.success('QR Code refreshed');
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-sky-500"></div>
+      <div className="flex flex-col items-center justify-center min-h-[60vh]">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-sky-500 mb-4"></div>
+        <p className="text-slate-500 font-medium">Checking connection status...</p>
       </div>
     );
   }
 
   return (
-    <div className="max-w-2xl mx-auto space-y-6 px-4 py-6">
-      {/* Status Card */}
-      <div className={`rounded-2xl p-6 text-center ${status.connected
-        ? 'bg-emerald-50 border-2 border-emerald-200'
-        : 'bg-amber-50 border-2 border-amber-200'
-        }`}>
-        <div className={`w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 ${status.connected ? 'bg-emerald-500' : 'bg-amber-500'
-          }`}>
-          {status.connected ? (
-            <CheckCircle className="text-white" size={32} />
-          ) : (
-            <AlertCircle className="text-white" size={32} />
-          )}
+    <div className="max-w-5xl mx-auto space-y-8 animate-fade-in pb-12">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+            WhatsApp Integration
+            {status.connected && (
+              <Badge variant="success" className="text-sm px-3 py-1">Active</Badge>
+            )}
+          </h1>
+          <p className="text-slate-500 font-medium mt-1">Manage your automated delivery bot connection</p>
         </div>
-        <h1 className={`text-2xl font-bold mb-2 ${status.connected ? 'text-emerald-900' : 'text-amber-900'
-          }`}>
-          {status.connected ? 'WhatsApp Connected' : 'WhatsApp Not Connected'}
-        </h1>
-        <p className={`text-sm ${status.connected ? 'text-emerald-700' : 'text-amber-700'
-          }`}>
-          {status.connected
-            ? 'Automation is active. Orders will be processed automatically.'
-            : 'Connect WhatsApp to start receiving orders.'}
-        </p>
+        {status.connected && (
+          <Button variant="danger" onClick={handleDisconnect} disabled={disconnecting} className="bg-white border-2 border-red-100 text-red-600 hover:bg-red-50 hover:border-red-200 shadow-sm">
+            <LogOut size={18} className="mr-2" />
+            {disconnecting ? 'Disconnecting...' : 'Disconnect Session'}
+          </Button>
+        )}
       </div>
 
-      {status.connected ? (
-        // Connected State
-        <div className="space-y-4">
-          <button
-            onClick={handleDisconnect}
-            className="w-full bg-red-500 text-white py-4 rounded-xl font-semibold hover:bg-red-600 transition-all shadow-sm active:scale-95 flex items-center justify-center gap-2"
-          >
-            <LogOut size={20} />
-            Disconnect WhatsApp
-          </button>
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+        {/* Left Column: Status & Connection */}
+        <div className="lg:col-span-2 space-y-6">
+          {status.connected ? (
+            // Connected State
+            <div className="bg-gradient-to-br from-emerald-500 to-teal-600 rounded-3xl p-8 text-white shadow-xl shadow-emerald-200 overflow-hidden relative">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -mr-16 -mt-16 pointer-events-none"></div>
 
-          {/* Collapsible More Info */}
-          <div className="bg-white border-2 border-slate-200 rounded-xl overflow-hidden">
-            <button
-              onClick={() => setShowMoreInfo(!showMoreInfo)}
-              className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
-            >
-              <span className="font-semibold text-slate-900">How it works</span>
-              {showMoreInfo ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-            </button>
-
-            {showMoreInfo && (
-              <div className="px-6 pb-6 pt-2">
-                <div className="space-y-3 text-sm text-slate-700">
-                  <div className="flex gap-3">
-                    <div className="w-6 h-6 bg-sky-100 rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-sky-600 text-xs">1</div>
-                    <div>
-                      <div className="font-medium">Customer sends "Hi" on WhatsApp</div>
-                      <div className="text-xs text-slate-600">Bot asks for details if first time</div>
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <div className="w-6 h-6 bg-sky-100 rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-sky-600 text-xs">2</div>
-                    <div>
-                      <div className="font-medium">Customer places order</div>
-                      <div className="text-xs text-slate-600">Chooses quantity and confirms</div>
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <div className="w-6 h-6 bg-sky-100 rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-sky-600 text-xs">3</div>
-                    <div>
-                      <div className="font-medium">Order auto-assigned</div>
-                      <div className="text-xs text-slate-600">Delivery staff gets notification</div>
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <div className="w-6 h-6 bg-sky-100 rounded-full flex items-center justify-center flex-shrink-0 font-semibold text-sky-600 text-xs">4</div>
-                    <div>
-                      <div className="font-medium">Track on dashboard</div>
-                      <div className="text-xs text-slate-600">Mark delivered and collect payment</div>
-                    </div>
-                  </div>
+              <div className="relative z-10 flex flex-col sm:flex-row items-center gap-6 text-center sm:text-left">
+                <div className="bg-white/20 p-4 rounded-full backdrop-blur-sm border border-white/30">
+                  <CheckCircle size={48} className="text-white" />
                 </div>
-
-                <div className="mt-4 pt-4 border-t border-slate-200">
-                  <p className="text-xs text-slate-600">
-                    <strong>Note:</strong> You can continue using WhatsApp normally on your phone. The system only automates customer order messages.
+                <div className="flex-1">
+                  <h2 className="text-2xl font-bold mb-2">System Online & Ready!</h2>
+                  <p className="text-emerald-50 text-lg opacity-90 max-w-md">
+                    Your WhatsApp bot is active using {status?.user?.id ? `number ending in ${status.user.id.slice(-4)}` : 'your connected number'}.
                   </p>
                 </div>
               </div>
-            )}
-          </div>
-        </div>
-      ) : (
-        // Disconnected State - QR Code
-        <div className="space-y-4">
-          {qrCode ? (
-            <div className="bg-white rounded-2xl p-6 border-2 border-slate-200 text-center">
-              <div className="inline-block p-4 bg-white rounded-2xl border-2 border-slate-200 shadow-lg mb-4">
-                <img
-                  src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrCode)}`}
-                  alt="WhatsApp QR Code"
-                  className="w-64 h-64"
-                />
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-8 relative z-10">
+                <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 border border-white/10">
+                  <div className="flex items-center gap-2 text-emerald-100 mb-1 text-xs font-semibold uppercase tracking-wider">
+                    <Activity size={14} /> Status
+                  </div>
+                  <div className="text-xl font-bold">Listening</div>
+                </div>
+                <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 border border-white/10">
+                  <div className="flex items-center gap-2 text-emerald-100 mb-1 text-xs font-semibold uppercase tracking-wider">
+                    <ShieldCheck size={14} /> session
+                  </div>
+                  <div className="text-xl font-bold">Secure</div>
+                </div>
+                <div className="bg-white/10 backdrop-blur-md rounded-xl p-4 border border-white/10">
+                  <div className="flex items-center gap-2 text-emerald-100 mb-1 text-xs font-semibold uppercase tracking-wider">
+                    <Smartphone size={14} /> Device
+                  </div>
+                  <div className="text-xl font-bold">Linked</div>
+                </div>
               </div>
-              <p className="text-sm text-slate-600 mb-4">
-                Open WhatsApp → Linked Devices → Link a Device → Scan this code
-              </p>
             </div>
           ) : (
-            <div className="bg-white rounded-2xl p-12 border-2 border-slate-200 text-center">
-              <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-sky-500 mx-auto mb-4"></div>
-              <p className="text-slate-600">Generating QR code...</p>
-            </div>
-          )}
-
-          <button
-            onClick={handleRefresh}
-            className="w-full bg-sky-500 text-white py-4 rounded-xl font-semibold hover:bg-sky-600 transition-all shadow-sm active:scale-95 flex items-center justify-center gap-2"
-          >
-            <RefreshCw size={20} />
-            Refresh QR Code
-          </button>
-
-          {/* Collapsible More Info */}
-          <div className="bg-white border-2 border-slate-200 rounded-xl overflow-hidden">
-            <button
-              onClick={() => setShowMoreInfo(!showMoreInfo)}
-              className="w-full px-6 py-4 flex items-center justify-between hover:bg-slate-50 transition-colors"
-            >
-              <span className="font-semibold text-slate-900">Setup help & safety</span>
-              {showMoreInfo ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
-            </button>
-
-            {showMoreInfo && (
-              <div className="px-6 pb-6 pt-2 space-y-4">
-                <div>
-                  <h3 className="font-semibold text-slate-900 mb-2 text-sm">How to connect:</h3>
-                  <ol className="text-sm text-slate-700 space-y-1 list-decimal list-inside">
-                    <li>Open WhatsApp on your phone</li>
-                    <li>Tap Menu (⋮) → Linked Devices</li>
-                    <li>Tap "Link a Device"</li>
-                    <li>Point phone at QR code above</li>
-                    <li>Wait for connection</li>
-                  </ol>
+            // Disconnected State - QR Scanner
+            <div className="bg-white rounded-3xl border border-slate-200 shadow-xl shadow-slate-100 overflow-hidden">
+              <div className="p-1.5 bg-gradient-to-r from-sky-400 via-violet-500 to-fuchsia-500"></div>
+              <div className="p-8 text-center">
+                <div className="mb-6">
+                  <h2 className="text-2xl font-black text-slate-900 mb-2">Link your WhatsApp</h2>
+                  <p className="text-slate-500 text-lg">Scan the QR code to connect the bot</p>
                 </div>
 
-                <div className="pt-4 border-t border-slate-200">
-                  <h3 className="font-semibold text-amber-900 mb-2 text-sm">⚠️ Important:</h3>
-                  <ul className="text-sm text-amber-800 space-y-1">
-                    <li>• Use a business/dedicated number (not personal)</li>
-                    <li>• Connection works like WhatsApp Web</li>
-                    <li>• You can disconnect safely anytime</li>
-                    <li>• Phone stays usable after disconnect</li>
-                  </ul>
+                <div className="bg-slate-50 rounded-2xl p-6 inline-block border-2 border-dashed border-slate-300 relative group">
+                  {qrCode ? (
+                    <>
+                      <div className="bg-white p-2 rounded-xl shadow-sm border border-slate-100">
+                        <img
+                          src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrCode)}`}
+                          alt="WhatsApp QR Code"
+                          className="w-64 h-64 mix-blend-multiply"
+                        />
+                      </div>
+                      <div className="absolute inset-0 flex items-center justify-center bg-white/80 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm rounded-2xl">
+                        <Button size="sm" onClick={handleRefresh} variant="secondary">
+                          <RefreshCw size={16} className="mr-2" /> Refresh Code
+                        </Button>
+                      </div>
+                    </>
+                  ) : (
+                    <div className="w-64 h-64 flex flex-col items-center justify-center">
+                      <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-slate-400 mb-4"></div>
+                      <p className="text-slate-400 text-sm font-medium">Generating secure code...</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="mt-8 flex justify-center">
+                  <div className="flex items-center gap-8 text-left max-w-lg mx-auto">
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <div className="w-12 h-12 bg-sky-50 rounded-full flex items-center justify-center text-sky-600 border border-sky-100 shadow-sm">
+                        <Smartphone size={24} />
+                      </div>
+                      <span className="text-xs font-bold text-slate-600">Open App</span>
+                    </div>
+                    <div className="h-px w-12 bg-slate-200"></div>
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <div className="w-12 h-12 bg-violet-50 rounded-full flex items-center justify-center text-violet-600 border border-violet-100 shadow-sm">
+                        <Menu size={24} />
+                      </div>
+                      <span className="text-xs font-bold text-slate-600">Menu &gt; Linked Devices</span>
+                    </div>
+                    <div className="h-px w-12 bg-slate-200"></div>
+                    <div className="flex flex-col items-center gap-2 text-center">
+                      <div className="w-12 h-12 bg-fuchsia-50 rounded-full flex items-center justify-center text-fuchsia-600 border border-fuchsia-100 shadow-sm">
+                        <Scan size={24} />
+                      </div>
+                      <span className="text-xs font-bold text-slate-600">Scan QR</span>
+                    </div>
+                  </div>
                 </div>
               </div>
-            )}
+
+              <div className="bg-slate-50 border-t border-slate-100 p-4 text-center">
+                <p className="text-xs text-slate-400 flex items-center justify-center gap-1.5">
+                  <ShieldCheck size={14} /> End-to-end encrypted connection managed by <span className="font-semibold text-slate-600">Thanni Canuuu</span>
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Right Column: Information & Help */}
+        <div className="space-y-6">
+          {/* Info Card */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm overflow-hidden">
+            <div className="p-6">
+              <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-4">
+                <HelpCircle size={20} className="text-sky-500" />
+                How It Works
+              </h3>
+
+              <div className="space-y-6 relative">
+                <div className="absolute left-3.5 top-2 bottom-4 w-0.5 bg-slate-100"></div>
+
+                <div className="relative flex gap-4">
+                  <div className="w-8 h-8 rounded-full bg-white border-2 border-sky-100 text-sky-600 flex items-center justify-center font-bold text-xs shadow-sm z-10">1</div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">Customer Messages</h4>
+                    <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                      When a customer sends "Hi" or "Order", the bot automatically responds with options.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="relative flex gap-4">
+                  <div className="w-8 h-8 rounded-full bg-white border-2 border-sky-100 text-sky-600 flex items-center justify-center font-bold text-xs shadow-sm z-10">2</div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">Order Placement</h4>
+                    <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                      Customers select can size & quantity directly in chat. Address is collected for new users.
+                    </p>
+                  </div>
+                </div>
+
+                <div className="relative flex gap-4">
+                  <div className="w-8 h-8 rounded-full bg-white border-2 border-sky-100 text-sky-600 flex items-center justify-center font-bold text-xs shadow-sm z-10">3</div>
+                  <div>
+                    <h4 className="text-sm font-bold text-slate-800">Instant Notification</h4>
+                    <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                      Orders appear on your dashboard instantly and delivery staff get WhatsApp alerts.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-sky-50 p-4 border-t border-sky-100">
+              <div className="flex gap-3">
+                <div className="mt-0.5">
+                  <AlertCircle size={16} className="text-sky-600" />
+                </div>
+                <div className="text-xs text-sky-800 leading-relaxed">
+                  <strong>Pro Tip:</strong> Use a dedicated business number for this bot. You can still use WhatsApp on your phone normally while linked.
+                </div>
+              </div>
+            </div>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }

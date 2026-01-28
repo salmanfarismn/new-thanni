@@ -71,6 +71,10 @@ module.exports = {
 				}
 			},
 			keyframes: {
+				'wave': {
+					'0%': { transform: 'translate(-50%, -50%) rotate(0deg)' },
+					'100%': { transform: 'translate(-50%, -50%) rotate(360deg)' }
+				},
 				'accordion-down': {
 					from: { height: '0' },
 					to: { height: 'var(--radix-accordion-content-height)' }
@@ -102,7 +106,9 @@ module.exports = {
 				'fade-in': 'fade-in 0.4s ease-out forwards',
 				'slide-in-right': 'slide-in-right 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards',
 				'scale-in': 'scale-in 0.3s ease-out forwards',
-				'pulse-subtle': 'pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite'
+				'pulse-subtle': 'pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite',
+				'wave-slow': 'wave 8s linear infinite',
+				'wave-slower': 'wave 12s linear infinite',
 			},
 			boxShadow: {
 				'glass': '0 4px 30px rgba(0, 0, 0, 0.1)',

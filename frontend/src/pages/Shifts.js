@@ -1,14 +1,18 @@
 import { useState, useEffect } from 'react';
 import { api } from '../context/AppContext';
-import { Clock, Users, Sun, Moon, Calendar, Save } from 'lucide-react';
+import { Clock, Users, Sun, Moon, Calendar, Save, ChevronLeft, ChevronRight, CheckCircle2, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
+import Button from '../components/ui/button';
+import Card from '../components/ui/card';
+import Badge from '../components/ui/badge';
 
-export default function Shifts() {
+export default function Shifts({ minimal = false }) {
   const [staff, setStaff] = useState([]);
   const [shifts, setShifts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
+  const today = new Date().toISOString().split('T')[0];
+  const [selectedDate, setSelectedDate] = useState(today);
 
   useEffect(() => {
     loadData();
@@ -61,11 +65,19 @@ export default function Shifts() {
   const saveShifts = async () => {
     try {
       setSaving(true);
+      const activeShifts = shifts.filter(s => s.is_active);
+      const removalPromises = shifts
+        .filter(s => !s.is_active && s._id) // If it has an ID, it needs to be updated/removed on backend
+        .map(s => api.post('/delivery-shifts', { ...s, shift: 'none' }));
 
+      // We just post everything based on logic, backend usually handles upsert
+      // But adhering to the previous logic:
       for (const shift of shifts) {
-        if (shift.shift !== 'none') {
-          await api.post('/delivery-shifts', shift);
-        }
+        // Post all changes including 'none' to ensure backend updates correctly
+        // Or strictly follow previous logic: only if shift !== 'none'
+        // The previous code only posted active shifts. Let's stick to that but ensure we handle updates.
+        // Actually, if a user changes 'morning' to 'none', we need to send that.
+        await api.post('/delivery-shifts', shift);
       }
 
       toast.success('Shifts saved successfully!');
@@ -78,183 +90,232 @@ export default function Shifts() {
     }
   };
 
-  const ShiftButton = ({ value, label, icon: Icon, color, staffId, staffName, currentShift }) => {
-    const isSelected = currentShift === value;
-
-    return (
-      <button
-        onClick={() => updateStaffShift(staffId, staffName, value)}
-        data-testid={`shift-btn-${staffId}-${value}`}
-        className={`flex-1 py-3 px-4 rounded-lg font-medium transition-all ${isSelected
-          ? `bg-${color}-500 text-white shadow-md`
-          : `bg-${color}-50 text-${color}-700 hover:bg-${color}-100 border border-${color}-200`
-          }`}
-      >
-        <div className="flex flex-col items-center gap-1">
-          <Icon size={20} />
-          <span className="text-sm">{label}</span>
-        </div>
-      </button>
-    );
+  const traverseDate = (days) => {
+    const date = new Date(selectedDate);
+    date.setDate(date.getDate() + days);
+    setSelectedDate(date.toISOString().split('T')[0]);
   };
+
+  const activeStaffCount = shifts.filter(s => s.is_active && s.date === selectedDate).length;
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen" data-testid="loading-spinner">
-        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-sky-500"></div>
+      <div className="flex flex-col items-center justify-center min-h-[60vh]">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-sky-500 mb-4"></div>
+        <p className="text-slate-500 font-medium">Loading schedule...</p>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6" data-testid="shifts-page">
-      <div>
-        <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Delivery Shifts</h1>
-        <p className="text-slate-600 mt-1">Manage daily delivery boy schedules</p>
-      </div>
-
-      <div className="bg-sky-50 border border-sky-200 rounded-xl p-5">
-        <div className="flex items-start gap-3">
-          <Clock className="text-sky-600 flex-shrink-0 mt-1" size={20} />
+    <div className="max-w-5xl mx-auto space-y-8 animate-fade-in pb-24 relative">
+      {/* Header */}
+      <div className="flex flex-col md:flex-row md:items-end justify-between gap-4">
+        {!minimal && (
           <div>
-            <h3 className="font-semibold text-sky-900 mb-1">Shift Management</h3>
-            <p className="text-sm text-sky-800">
-              Assign delivery boys to shifts. Orders are automatically assigned to available staff based on time.
-            </p>
-            <div className="mt-2 text-sm text-sky-700">
-              <span className="font-semibold">Morning:</span> 6 AM - 2 PM  |
-              <span className="font-semibold ml-3">Evening:</span> 2 PM - 10 PM
-            </div>
+            <h1 className="text-3xl font-black text-slate-900 tracking-tight">Shift Operations</h1>
+            <p className="text-slate-500 font-medium mt-1">Manage delivery schedules and staff availability</p>
           </div>
-        </div>
-      </div>
-
-      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-sm">
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-xl font-semibold text-slate-900">Today's Schedule</h2>
-          <div className="flex items-center gap-2">
-            <Calendar size={18} className="text-slate-500" />
-            <input
-              type="date"
-              value={selectedDate}
-              onChange={(e) => setSelectedDate(e.target.value)}
-              data-testid="date-selector"
-              className="px-3 py-2 border border-slate-200 rounded-lg focus:ring-2 focus:ring-sky-100 focus:border-sky-400"
-            />
-          </div>
-        </div>
-
-        <div className="space-y-4">
-          {staff.length > 0 ? (
-            staff.map((person) => {
-              const currentShift = getStaffShift(person.staff_id);
-
-              return (
-                <div
-                  key={person.staff_id}
-                  className="border-2 border-slate-200 rounded-xl p-5 hover:border-sky-200 transition-all"
-                  data-testid={`staff-card-${person.staff_id}`}
-                >
-                  <div className="flex items-center gap-3 mb-4">
-                    <div className="w-12 h-12 bg-sky-100 rounded-full flex items-center justify-center">
-                      <Users className="text-sky-600" size={20} />
-                    </div>
-                    <div className="flex-1">
-                      <div className="font-semibold text-slate-900 text-lg">{person.name}</div>
-                      <div className="text-sm text-slate-600">{person.phone_number}</div>
-                    </div>
-                    {currentShift.is_active && (
-                      <span className="px-3 py-1 bg-emerald-100 text-emerald-700 text-sm font-semibold rounded-full">
-                        Active
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="grid grid-cols-4 gap-2">
-                    <ShiftButton
-                      value="morning"
-                      label="Morning"
-                      icon={Sun}
-                      color="amber"
-                      staffId={person.staff_id}
-                      staffName={person.name}
-                      currentShift={currentShift.shift}
-                    />
-                    <ShiftButton
-                      value="evening"
-                      label="Evening"
-                      icon={Moon}
-                      color="indigo"
-                      staffId={person.staff_id}
-                      staffName={person.name}
-                      currentShift={currentShift.shift}
-                    />
-                    <ShiftButton
-                      value="full_day"
-                      label="Full Day"
-                      icon={Clock}
-                      color="emerald"
-                      staffId={person.staff_id}
-                      staffName={person.name}
-                      currentShift={currentShift.shift}
-                    />
-                    <button
-                      onClick={() => updateStaffShift(person.staff_id, person.name, 'none')}
-                      data-testid={`shift-btn-${person.staff_id}-none`}
-                      className={`py-3 px-4 rounded-lg font-medium transition-all ${currentShift.shift === 'none' || !currentShift.is_active
-                        ? 'bg-slate-500 text-white shadow-md'
-                        : 'bg-slate-50 text-slate-700 hover:bg-slate-100 border border-slate-200'
-                        }`}
-                    >
-                      <div className="flex flex-col items-center gap-1">
-                        <span className="text-xl">✕</span>
-                        <span className="text-sm">Off</span>
-                      </div>
-                    </button>
-                  </div>
-                </div>
-              );
-            })
-          ) : (
-            <div className="text-center py-12 text-slate-500">
-              <Users size={48} className="mx-auto mb-4 text-slate-300" />
-              <p>No delivery staff found</p>
-            </div>
-          )}
-        </div>
-
-        {staff.length > 0 && (
-          <button
-            onClick={saveShifts}
-            disabled={saving}
-            data-testid="save-shifts-btn"
-            className="w-full bg-sky-500 text-white py-4 rounded-xl font-semibold hover:bg-sky-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 shadow-sm active:scale-95 mt-6"
-          >
-            {saving ? (
-              <>
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>
-                Saving...
-              </>
-            ) : (
-              <>
-                <Save size={20} />
-                Save Shifts
-              </>
-            )}
-          </button>
         )}
+
+        {/* Date Navigator */}
+        <div className={`flex items-center bg-white rounded-xl shadow-sm border border-slate-200 p-1 ${minimal ? 'ml-auto' : ''}`}>
+          <button onClick={() => traverseDate(-1)} className="p-2 hover:bg-slate-50 rounded-lg text-slate-500 transition-colors">
+            <ChevronLeft size={20} />
+          </button>
+
+          <div className="px-4 py-1 text-center min-w-[140px]">
+            <span className="text-sm font-semibold text-slate-900 block">
+              {new Date(selectedDate).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}
+            </span>
+            {selectedDate === today && (
+              <span className="text-xs font-bold text-sky-500 uppercase tracking-wider">Today</span>
+            )}
+          </div>
+
+          <button onClick={() => traverseDate(1)} className="p-2 hover:bg-slate-50 rounded-lg text-slate-500 transition-colors">
+            <ChevronRight size={20} />
+          </button>
+        </div>
       </div>
 
-      <div className="bg-amber-50 border border-amber-200 rounded-xl p-5">
-        <h3 className="font-semibold text-amber-900 mb-2">Shift Assignment Rules</h3>
-        <ul className="text-sm text-amber-800 space-y-1">
-          <li>• Morning orders (6 AM - 2 PM) assigned to Morning or Full Day staff</li>
-          <li>• Evening orders (2 PM - 10 PM) assigned to Evening or Full Day staff</li>
-          <li>• If no staff available for a shift, orders will pause</li>
-          <li>• Shift settings must be updated daily</li>
-          <li>• Round-robin assignment among active staff in each shift</li>
-        </ul>
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
+        {/* Main Schedule Area */}
+        <div className="lg:col-span-3 space-y-6">
+
+          {/* Active Staff Summary */}
+          <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-2xl p-6 text-white shadow-lg flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <div className="bg-white/10 p-3 rounded-xl backdrop-blur-sm">
+                <Users className="text-sky-300" size={24} />
+              </div>
+              <div>
+                <h2 className="text-xl font-bold">Active Staff</h2>
+                <p className="text-slate-300 text-sm">Scheduled for {new Date(selectedDate).toLocaleDateString()}</p>
+              </div>
+            </div>
+            <div className="text-right">
+              <div className="text-3xl font-black text-white">{activeStaffCount}</div>
+              <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">On Duty</div>
+            </div>
+          </div>
+
+          <div className="space-y-4">
+            {staff.length > 0 ? (
+              staff.map((person) => {
+                const currentShift = getStaffShift(person.staff_id);
+                const shiftType = currentShift.shift;
+
+                return (
+                  <Card key={person.staff_id} noPadding className="overflow-hidden group hover:border-sky-200 transition-all duration-300">
+                    <div className="p-6">
+                      <div className="flex flex-col sm:flex-row gap-6 items-start sm:items-center">
+
+                        {/* Person Info */}
+                        <div className="flex items-center gap-4 flex-1">
+                          <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-bold shadow-sm transition-colors ${shiftType !== 'none'
+                            ? 'bg-sky-100 text-sky-700'
+                            : 'bg-slate-100 text-slate-400'
+                            }`}>
+                            {person.name.charAt(0)}
+                          </div>
+                          <div>
+                            <h3 className="font-bold text-lg text-slate-900">{person.name}</h3>
+                            <p className="text-slate-500 text-sm font-medium">{person.phone_number}</p>
+                          </div>
+                        </div>
+
+                        {/* Visual Shift Indicator */}
+                        {shiftType !== 'none' && (
+                          <Badge variant={
+                            shiftType === 'morning' ? 'warning' :
+                              shiftType === 'evening' ? 'info' : 'success'
+                          } className="capitalize px-3 py-1">
+                            <CheckCircle2 size={12} className="mr-1.5" />
+                            {shiftType.replace('_', ' ')} Assigned
+                          </Badge>
+                        )}
+                      </div>
+
+                      {/* Controls */}
+                      <div className="mt-6 pt-6 border-t border-slate-100">
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                          <button
+                            onClick={() => updateStaffShift(person.staff_id, person.name, 'morning')}
+                            className={`relative p-3 rounded-xl border-2 text-sm font-bold transition-all flex flex-col items-center gap-2 ${shiftType === 'morning'
+                              ? 'bg-amber-50 border-amber-500 text-amber-700 shadow-sm'
+                              : 'bg-white border-slate-100 text-slate-600 hover:border-amber-200 hover:bg-amber-50/50'
+                              }`}
+                          >
+                            <Sun size={20} className={shiftType === 'morning' ? 'fill-amber-500 text-amber-500' : 'text-slate-400'} />
+                            <span>Morning</span>
+                            {shiftType === 'morning' && <div className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-amber-500 rounded-full border-2 border-white"></div>}
+                          </button>
+
+                          <button
+                            onClick={() => updateStaffShift(person.staff_id, person.name, 'evening')}
+                            className={`relative p-3 rounded-xl border-2 text-sm font-bold transition-all flex flex-col items-center gap-2 ${shiftType === 'evening'
+                              ? 'bg-indigo-50 border-indigo-500 text-indigo-700 shadow-sm'
+                              : 'bg-white border-slate-100 text-slate-600 hover:border-indigo-200 hover:bg-indigo-50/50'
+                              }`}
+                          >
+                            <Moon size={20} className={shiftType === 'evening' ? 'fill-indigo-500 text-indigo-500' : 'text-slate-400'} />
+                            <span>Evening</span>
+                            {shiftType === 'evening' && <div className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-indigo-500 rounded-full border-2 border-white"></div>}
+                          </button>
+
+                          <button
+                            onClick={() => updateStaffShift(person.staff_id, person.name, 'full_day')}
+                            className={`relative p-3 rounded-xl border-2 text-sm font-bold transition-all flex flex-col items-center gap-2 ${shiftType === 'full_day'
+                              ? 'bg-emerald-50 border-emerald-500 text-emerald-700 shadow-sm'
+                              : 'bg-white border-slate-100 text-slate-600 hover:border-emerald-200 hover:bg-emerald-50/50'
+                              }`}
+                          >
+                            <Clock size={20} className={shiftType === 'full_day' ? 'text-emerald-500' : 'text-slate-400'} />
+                            <span>Full Day</span>
+                            {shiftType === 'full_day' && <div className="absolute -top-1.5 -right-1.5 w-4 h-4 bg-emerald-500 rounded-full border-2 border-white"></div>}
+                          </button>
+
+                          <button
+                            onClick={() => updateStaffShift(person.staff_id, person.name, 'none')}
+                            className={`p-3 rounded-xl border-2 text-sm font-bold transition-all flex flex-col items-center gap-2 ${shiftType === 'none'
+                              ? 'bg-slate-100 border-slate-300 text-slate-500'
+                              : 'bg-white border-slate-100 text-slate-400 hover:bg-slate-50'
+                              }`}
+                          >
+                            <span className="text-xl leading-none">✕</span>
+                            <span>Off</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </Card>
+                );
+              })
+            ) : (
+              <div className="text-center py-20 bg-slate-50 rounded-3xl border-2 border-dashed border-slate-200">
+                <Users size={48} className="mx-auto mb-4 text-slate-300" />
+                <h3 className="text-slate-900 font-bold text-lg">No Staff Found</h3>
+                <p className="text-slate-500">Add delivery staff to manage shifts</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Sidebar Info */}
+        <div className="space-y-6">
+          <Card className="bg-sky-50 border-sky-100 shadow-sm">
+            <div className="space-y-4">
+              <h3 className="font-bold text-sky-900 flex items-center gap-2">
+                <AlertCircle size={18} />
+                Shift Rules
+              </h3>
+              <div className="space-y-3">
+                <div className="bg-white/60 p-3 rounded-lg text-sm text-sky-900 border border-sky-100">
+                  <div className="font-bold text-xs uppercase text-sky-500 mb-1">Morning</div>
+                  06:00 AM - 02:00 PM
+                </div>
+                <div className="bg-white/60 p-3 rounded-lg text-sm text-sky-900 border border-sky-100">
+                  <div className="font-bold text-xs uppercase text-sky-500 mb-1">Evening</div>
+                  02:00 PM - 10:00 PM
+                </div>
+                <p className="text-xs text-sky-700 leading-relaxed px-1">
+                  Orders are auto-assigned to active staff in the current time slot. If no one is assigned, orders will remain pending.
+                </p>
+              </div>
+            </div>
+          </Card>
+        </div>
       </div>
+
+      {/* Floating Save Action Bar */}
+      {staff.length > 0 && (
+        <div className="fixed bottom-6 left-0 right-0 flex justify-center pointer-events-none z-50 px-4">
+          <div className="bg-white border border-slate-200 shadow-2xl shadow-slate-300/50 p-2 rounded-2xl pointer-events-auto flex items-center gap-4 animate-slide-up">
+            <div className="px-4 text-sm font-medium text-slate-600 hidden sm:block">
+              Remember to save your changes
+            </div>
+            <Button
+              size="lg"
+              onClick={saveShifts}
+              className="shadow-sky-500/20 px-8"
+              disabled={saving}
+            >
+              {saving ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save size={18} className="mr-2" />
+                  Save Schedule
+                </>
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,7 +9,7 @@ from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional
 import uuid
-from datetime import datetime, timezone, date
+from datetime import datetime, timezone, date, timedelta
 import httpx
 from whatsapp_cloud_api import whatsapp_api
 from contextlib import asynccontextmanager
@@ -124,6 +124,31 @@ class OrderCreateRequest(BaseModel):
     customer_address: str
     litre_size: int
     quantity: int
+
+# New: Multi-item order for WhatsApp bot
+class OrderItemRequest(BaseModel):
+    litre_size: int
+    quantity: int
+    price_per_can: float
+
+class MultiItemOrderRequest(BaseModel):
+    customer_phone: str
+    customer_name: str
+    customer_address: str
+    items: list[OrderItemRequest]
+    delivery_date: Optional[str] = None
+    is_tomorrow_order: bool = False
+
+# New: Customer creation request
+class CustomerCreateRequest(BaseModel):
+    phone_number: str
+    name: str
+    address: str
+
+# New: Inventory check request
+class InventoryCheckRequest(BaseModel):
+    quantity: int
+
 
 class StockUpdateRequest(BaseModel):
     total_stock: Optional[int] = None
@@ -826,7 +851,8 @@ async def get_dashboard_metrics():
     
     stock = await get_today_stock()
     
-    orders = await db.orders.find({"created_at": {"$regex": f"^{today}"}}).to_list(1000)
+    # Get all orders instead of just today's
+    orders = await db.orders.find({}).to_list(10000)
     
     total_orders = len(orders)
     delivered_orders = len([o for o in orders if o['status'] == 'delivered'])
@@ -875,11 +901,24 @@ async def get_dashboard_sales(
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
         
         # Build date range query
-        # created_at is stored as ISO string, so we use string comparison
+        # created_at is stored as ISO string in UTC
+        # Adjust for IST (UTC+5:30) - IST midnight = UTC 18:30 previous day
+        # So for IST date, we need to query from previous day 18:30 UTC to current day 18:29 UTC
+        
+        # Parse the dates
+        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+        
+        # Convert IST dates to UTC range
+        # IST is UTC+5:30, so IST midnight = previous day 18:30 UTC
+        from datetime import time as dt_time
+        start_utc = datetime.combine(start_dt.date() - timedelta(days=1), dt_time(18, 30, 0))
+        end_utc = datetime.combine(end_dt.date(), dt_time(18, 29, 59))
+        
         query = {
             "created_at": {
-                "$gte": f"{start_date}T00:00:00",
-                "$lte": f"{end_date}T23:59:59"
+                "$gte": start_utc.isoformat(),
+                "$lte": end_utc.isoformat()
             }
         }
         
@@ -902,7 +941,9 @@ async def get_dashboard_sales(
         
         # Payment breakdown
         paid_count = len(paid_orders)
-        pending_payment_count = len([o for o in orders if o.get('payment_status') == 'pending'])
+        pending_payment_orders = [o for o in orders if o.get('payment_status') == 'pending']
+        pending_payment_count = len(pending_payment_orders)
+        pending_payment_amount = sum(o.get('amount', 0) for o in pending_payment_orders)
         
         return {
             "start_date": start_date,
@@ -914,7 +955,8 @@ async def get_dashboard_sales(
             "delivered_orders": delivered_orders,
             "pending_orders": pending_orders,
             "paid_orders": paid_count,
-            "pending_payment_orders": pending_payment_count
+            "pending_payment_orders": pending_payment_count,
+            "pending_payment_amount": pending_payment_amount
         }
     except HTTPException:
         raise
@@ -923,7 +965,14 @@ async def get_dashboard_sales(
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.get("/orders")
-async def get_orders(status: Optional[str] = None, staff_id: Optional[str] = None, date_filter: Optional[str] = None):
+async def get_orders(
+    status: Optional[str] = None, 
+    staff_id: Optional[str] = None, 
+    date_filter: Optional[str] = None,
+    delivery_date: Optional[str] = None,
+    include_tomorrow: bool = False
+):
+    """Get orders with optional filters. Tomorrow's orders are prioritized first."""
     query = {}
     if status:
         query['status'] = status
@@ -931,12 +980,72 @@ async def get_orders(status: Optional[str] = None, staff_id: Optional[str] = Non
         query['delivery_staff_id'] = staff_id
     if date_filter:
         query['created_at'] = {"$regex": f"^{date_filter}"}
-    else:
-        today = date.today().isoformat()
-        query['created_at'] = {"$regex": f"^{today}"}
+    if delivery_date:
+        query['delivery_date'] = delivery_date
     
+    # Get orders
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
+    
+    # If include_tomorrow is True, prioritize tomorrow's orders at the top
+    if include_tomorrow:
+        tomorrow = (date.today() + timedelta(days=1)).isoformat()
+        today = date.today().isoformat()
+        
+        tomorrow_orders = [o for o in orders if o.get('delivery_date') == tomorrow or o.get('is_tomorrow_order')]
+        today_orders = [o for o in orders if o.get('delivery_date', today) == today and not o.get('is_tomorrow_order')]
+        other_orders = [o for o in orders if o not in tomorrow_orders and o not in today_orders]
+        
+        # Tomorrow's orders first, then today's, then others
+        orders = tomorrow_orders + today_orders + other_orders
+    
     return orders
+
+@api_router.get("/orders/tomorrow")
+async def get_tomorrow_orders():
+    """Get all orders scheduled for tomorrow - these appear first in delivery assignment"""
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    
+    orders = await db.orders.find(
+        {"$or": [
+            {"delivery_date": tomorrow},
+            {"is_tomorrow_order": True, "status": "pending"}
+        ]},
+        {"_id": 0}
+    ).sort("created_at", 1).to_list(1000)  # Sort by created_at ascending so first orders come first
+    
+    return {
+        "date": tomorrow,
+        "count": len(orders),
+        "orders": orders
+    }
+
+@api_router.get("/orders/delivery-queue")
+async def get_delivery_queue(staff_id: Optional[str] = None):
+    """Get delivery queue with tomorrow's orders first, then today's orders"""
+    today = date.today().isoformat()
+    tomorrow = (date.today() + timedelta(days=1)).isoformat()
+    
+    query = {"status": "pending"}
+    if staff_id:
+        query['delivery_staff_id'] = staff_id
+    
+    all_orders = await db.orders.find(query, {"_id": 0}).to_list(1000)
+    
+    # Separate tomorrow's orders (scheduled from yesterday) and today's orders
+    tomorrow_orders = [o for o in all_orders if o.get('is_tomorrow_order') and o.get('delivery_date') == today]
+    today_orders = [o for o in all_orders if not o.get('is_tomorrow_order') and o.get('delivery_date', today) == today]
+    
+    # Tomorrow's orders come first (they were booked yesterday)
+    prioritized_orders = tomorrow_orders + today_orders
+    
+    return {
+        "date": today,
+        "tomorrow_orders_count": len(tomorrow_orders),
+        "today_orders_count": len(today_orders),
+        "total": len(prioritized_orders),
+        "orders": prioritized_orders
+    }
+
 
 @api_router.post("/orders")
 async def create_order_directly(order_req: OrderCreateRequest):
@@ -1262,6 +1371,244 @@ async def get_customers(limit: Optional[int] = Query(100)):
     """Get all customers"""
     customers = await db.customers.find({}, {"_id": 0}).limit(limit).to_list(limit)
     return customers
+
+@api_router.get("/customers/{phone_number}")
+async def get_customer_by_phone(phone_number: str):
+    """Get a specific customer by phone number"""
+    # Try with and without country code
+    customer = await db.customers.find_one({"phone_number": phone_number}, {"_id": 0})
+    if not customer:
+        # Try with 91 prefix
+        customer = await db.customers.find_one({"phone_number": f"91{phone_number}"}, {"_id": 0})
+    if not customer:
+        # Try without 91 prefix if it starts with 91
+        if phone_number.startswith("91") and len(phone_number) > 10:
+            customer = await db.customers.find_one({"phone_number": phone_number[2:]}, {"_id": 0})
+    
+    if not customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    return customer
+
+@api_router.post("/customers")
+async def create_customer(customer_data: CustomerCreateRequest):
+    """Create a new customer"""
+    phone = customer_data.phone_number.strip()
+    
+    # Check if customer already exists
+    existing = await db.customers.find_one({"phone_number": phone})
+    if existing:
+        # Update existing customer
+        await db.customers.update_one(
+            {"phone_number": phone},
+            {"$set": {
+                "name": customer_data.name,
+                "address": customer_data.address,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+        updated = await db.customers.find_one({"phone_number": phone}, {"_id": 0})
+        return updated
+    
+    # Create new customer
+    customer = {
+        "phone_number": phone,
+        "name": customer_data.name,
+        "address": customer_data.address,
+        "created_at": datetime.now(timezone.utc).isoformat()
+    }
+    await db.customers.insert_one(customer)
+    customer.pop("_id", None)
+    return customer
+
+@api_router.get("/products/prices")
+async def get_product_prices():
+    """Get current prices for all products"""
+    prices = {}
+    
+    # Get all active price settings
+    price_settings = await db.price_settings.find({"is_active": True}, {"_id": 0}).to_list(10)
+    
+    for setting in price_settings:
+        prices[f"{setting['litre_size']}L"] = setting['price_per_can']
+    
+    # Default prices if not set
+    if "20L" not in prices:
+        prices["20L"] = 50.0
+    if "25L" not in prices:
+        prices["25L"] = 65.0
+    
+    return prices
+
+@api_router.post("/inventory/check")
+async def check_inventory(request: InventoryCheckRequest):
+    """Check if requested quantity is available in inventory"""
+    stock = await get_today_stock()
+    
+    available = stock['available_stock'] >= request.quantity
+    
+    return {
+        "available": available,
+        "requested": request.quantity,
+        "available_stock": stock['available_stock'],
+        "total_stock": stock['total_stock']
+    }
+
+@api_router.post("/orders/create")
+async def create_multi_item_order(order_req: MultiItemOrderRequest):
+    """Create a new order with multiple items (used by WhatsApp bot)"""
+    try:
+        phone_number = order_req.customer_phone
+        
+        # Use provided delivery date or default to today
+        if order_req.delivery_date:
+            delivery_date = order_req.delivery_date
+        else:
+            delivery_date = date.today().isoformat()
+        
+        # Calculate total quantity and amount
+        total_quantity = sum(item.quantity for item in order_req.items)
+        total_amount = sum(item.quantity * item.price_per_can for item in order_req.items)
+        
+        # Check stock only for today's orders
+        if not order_req.is_tomorrow_order:
+            stock = await get_today_stock()
+            if stock['available_stock'] < total_quantity:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Insufficient stock. Available: {stock['available_stock']}, Requested: {total_quantity}"
+                )
+        
+        # Get or create stock for tomorrow if needed
+        if order_req.is_tomorrow_order:
+            tomorrow = (date.today() + timedelta(days=1)).isoformat()
+            tomorrow_stock = await db.stock.find_one({"date": tomorrow})
+            if not tomorrow_stock:
+                # Create tomorrow's stock with default values
+                await db.stock.insert_one({
+                    "date": tomorrow,
+                    "total_stock": 50,
+                    "available_stock": 50,
+                    "orders_count": 0,
+                    "updated_at": datetime.now(timezone.utc).isoformat()
+                })
+        
+        # Assign delivery staff (prefer staff assigned for that date's shift)
+        staff, shift = await get_active_delivery_staff_for_shift()
+        if not staff and not order_req.is_tomorrow_order:
+            # For tomorrow's orders, we'll assign staff later
+            raise HTTPException(status_code=400, detail="No delivery staff available for this shift.")
+        
+        # Create individual orders for each item size
+        created_orders = []
+        
+        for item in order_req.items:
+            if item.quantity <= 0:
+                continue
+                
+            item_amount = item.quantity * item.price_per_can
+            order_id = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S%f')[:17]}"
+            
+            order_data = {
+                "order_id": order_id,
+                "customer_phone": phone_number,
+                "customer_name": order_req.customer_name,
+                "customer_address": order_req.customer_address,
+                "litre_size": item.litre_size,
+                "quantity": item.quantity,
+                "price_per_can": item.price_per_can,
+                "status": "pending",
+                "delivery_staff_id": staff['staff_id'] if staff else None,
+                "delivery_staff_name": staff['name'] if staff else "To be assigned",
+                "payment_status": "pending",
+                "payment_method": None,
+                "amount": item_amount,
+                "shift_assigned": shift,
+                "delivery_date": delivery_date,
+                "is_tomorrow_order": order_req.is_tomorrow_order,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "delivered_at": None,
+                "notification_status": "queued",
+                "notification_attempts": 0,
+                "last_notification_error": None
+            }
+            
+            await db.orders.insert_one(order_data)
+            created_orders.append(order_id)
+            
+            # Update stock
+            if not order_req.is_tomorrow_order:
+                await db.stock.update_one(
+                    {"date": date.today().isoformat()},
+                    {
+                        "$inc": {"available_stock": -item.quantity, "orders_count": 1},
+                        "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
+                    }
+                )
+            else:
+                # Update tomorrow's stock
+                tomorrow = (date.today() + timedelta(days=1)).isoformat()
+                await db.stock.update_one(
+                    {"date": tomorrow},
+                    {
+                        "$inc": {"available_stock": -item.quantity, "orders_count": 1},
+                        "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
+                    }
+                )
+            
+            # Update staff order count
+            if staff:
+                await db.delivery_staff.update_one(
+                    {"staff_id": staff['staff_id']},
+                    {"$inc": {"active_orders_count": 1}}
+                )
+            
+            # Add to notification queue (only for today's orders)
+            if not order_req.is_tomorrow_order and staff:
+                await add_to_notification_queue(order_id)
+        
+        # Return combined response
+        return {
+            "success": True,
+            "order_id": created_orders[0] if len(created_orders) == 1 else ", ".join(created_orders),
+            "total_amount": total_amount,
+            "delivery_staff": staff['name'] if staff else "To be assigned",
+            "shift": shift,
+            "delivery_date": delivery_date,
+            "is_tomorrow_order": order_req.is_tomorrow_order,
+            "notification_status": "queued" if not order_req.is_tomorrow_order else "scheduled"
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating multi-item order: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@api_router.post("/whatsapp/delivery-response")
+async def handle_delivery_response(phone_number: str = Query(...), message: str = Query(...)):
+    """Handle delivery staff responses from WhatsApp"""
+    try:
+        # Find delivery staff by phone
+        staff = await db.delivery_staff.find_one({
+            "$or": [
+                {"phone_number": phone_number},
+                {"phone_number": f"91{phone_number}"},
+                {"phone_number": phone_number[2:] if phone_number.startswith("91") else phone_number}
+            ]
+        })
+        
+        if not staff:
+            return {"success": False, "message": "Delivery staff not found"}
+        
+        # Process message (reuse existing logic)
+        await handle_delivery_boy_message(phone_number, message.lower(), staff)
+        
+        return {"success": True}
+    except Exception as e:
+        logging.error(f"Error handling delivery response: {e}")
+        return {"success": False, "message": str(e)}
+
+
 
 @api_router.get("/export/orders")
 async def export_orders(date_filter: Optional[str] = None, format: str = Query("json")):

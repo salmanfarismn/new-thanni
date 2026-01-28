@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, Link } from 'react-router-dom';
-import { Package, TruckIcon, Droplets, Settings, LogOut, ChevronRight } from 'lucide-react';
+import { Package, TruckIcon, Droplets, Settings, LogOut, ChevronRight, Users } from 'lucide-react';
 import { useCompanyName } from '../../context/AppContext';
 
 const Sidebar = ({ className = "" }) => {
@@ -11,6 +11,7 @@ const Sidebar = ({ className = "" }) => {
     const navItems = [
         { path: '/', icon: Package, label: 'Dashboard' },
         { path: '/orders', icon: TruckIcon, label: 'Orders' },
+        { path: '/delivery', icon: Users, label: 'Delivery Management' },
         { path: '/stock', icon: Droplets, label: 'Stock Manager' },
         { path: '/settings', icon: Settings, label: 'Settings' },
     ];
