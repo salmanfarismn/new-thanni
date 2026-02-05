@@ -1,12 +1,23 @@
 import { useState, useEffect } from 'react';
 import { api } from '../context/AppContext';
-import { Package, TruckIcon, Filter, Search, CheckCircle, XCircle, IndianRupee, RefreshCw, Bell, Calendar, ChevronDown, MoreHorizontal, Eye, Clock, Users, Plus, Minus, User, MapPin, Hash, AlertCircle, Droplets, PhoneCall, MessageCircle } from 'lucide-react';
+import { Package, TruckIcon, Filter, Search, CheckCircle, XCircle, IndianRupee, RefreshCw, Bell, Calendar, ChevronDown, MoreHorizontal, Eye, Clock, Users, Plus, Minus, User, MapPin, Hash, AlertCircle, Droplets, PhoneCall, MessageCircle, CreditCard, Wallet, Banknote } from 'lucide-react';
 import { toast } from 'sonner';
 import Card from '../components/ui/card';
 import Badge from '../components/ui/badge';
 import Button from '../components/ui/button';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '../components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '../components/ui/dialog';
+
+// Payment status constants
+const PAYMENT_STATUS = {
+  PENDING: 'pending',
+  PAID_CASH: 'paid_cash',
+  PAID_UPI: 'paid_upi',
+  UPI_PENDING: 'upi_pending',
+  CASH_DUE: 'cash_due',
+  DELIVERED_UNPAID: 'delivered_unpaid',
+  PAID: 'paid' // Legacy status
+};
 
 export default function Orders() {
   const [orders, setOrders] = useState([]);
@@ -17,6 +28,7 @@ export default function Orders() {
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
+  const [outstandingSummary, setOutstandingSummary] = useState(null);
   const [newOrder, setNewOrder] = useState({
     customer_phone: '',
     customer_name: '',
@@ -35,12 +47,20 @@ export default function Orders() {
       setFilter(statusParam);
     } else if (paymentParam === 'pending') {
       setFilter('pending-payment');
+    } else if (paymentParam === 'upi_pending') {
+      setFilter('upi-pending');
+    } else if (paymentParam === 'cash_due') {
+      setFilter('cash-due');
     }
   }, []);
 
   useEffect(() => {
     loadOrders();
-    const interval = setInterval(loadOrders, 10000);
+    loadOutstandingSummary();
+    const interval = setInterval(() => {
+      loadOrders();
+      loadOutstandingSummary();
+    }, 10000);
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
@@ -49,8 +69,8 @@ export default function Orders() {
     try {
       setLoading(true);
       const params = {};
-      // Only send status filter for actual order statuses, not payment filter
-      if (filter !== 'all' && filter !== 'pending-payment') {
+      // Only send status filter for actual order statuses, not payment filters
+      if (filter !== 'all' && !['pending-payment', 'upi-pending', 'cash-due', 'unpaid'].includes(filter)) {
         params.status = filter;
       }
       const response = await api.get('/orders', { params });
@@ -63,6 +83,15 @@ export default function Orders() {
     }
   };
 
+  const loadOutstandingSummary = async () => {
+    try {
+      const response = await api.get('/orders/outstanding/summary');
+      setOutstandingSummary(response.data);
+    } catch (error) {
+      console.error('Error loading outstanding summary:', error);
+    }
+  };
+
   const updateOrderStatus = async (orderId, status, paymentStatus = null, paymentMethod = null) => {
     try {
       const payload = { order_id: orderId, status };
@@ -72,10 +101,26 @@ export default function Orders() {
       await api.put(`/orders/${orderId}/status`, payload);
       toast.success(`Order ${status}!`);
       loadOrders();
+      loadOutstandingSummary();
       setIsDialogOpen(false);
     } catch (error) {
       console.error('Error updating order:', error);
       toast.error('Failed to update order');
+    }
+  };
+
+  const confirmPayment = async (orderId, paymentStatus) => {
+    try {
+      await api.post(`/orders/${orderId}/payment/confirm`, null, {
+        params: { payment_status: paymentStatus }
+      });
+      toast.success('Payment confirmed!');
+      loadOrders();
+      loadOutstandingSummary();
+      setIsDialogOpen(false);
+    } catch (error) {
+      console.error('Error confirming payment:', error);
+      toast.error('Failed to confirm payment');
     }
   };
 
@@ -129,9 +174,21 @@ export default function Orders() {
       order.order_id.toLowerCase().includes(searchTerm.toLowerCase()) ||
       order.customer_phone.includes(searchTerm);
 
-    // Handle pending-payment filter
+    // Handle payment filters
     if (filter === 'pending-payment') {
-      return matchesSearch && order.payment_status === 'pending';
+      return matchesSearch && ['pending', 'delivered_unpaid'].includes(order.payment_status);
+    }
+    if (filter === 'upi-pending') {
+      return matchesSearch && order.payment_status === PAYMENT_STATUS.UPI_PENDING;
+    }
+    if (filter === 'cash-due') {
+      return matchesSearch && order.payment_status === PAYMENT_STATUS.CASH_DUE;
+    }
+    if (filter === 'unpaid') {
+      return matchesSearch && [PAYMENT_STATUS.PENDING, PAYMENT_STATUS.UPI_PENDING, PAYMENT_STATUS.CASH_DUE, PAYMENT_STATUS.DELIVERED_UNPAID].includes(order.payment_status);
+    }
+    if (filter === 'paid') {
+      return matchesSearch && [PAYMENT_STATUS.PAID, PAYMENT_STATUS.PAID_CASH, PAYMENT_STATUS.PAID_UPI].includes(order.payment_status);
     }
 
     return matchesSearch;
@@ -141,24 +198,60 @@ export default function Orders() {
     switch (status) {
       case 'delivered': return <Badge variant="success"> Delivered </Badge>;
       case 'pending': return <Badge variant="warning"> Pending </Badge>;
+      case 'out_for_delivery': return <Badge variant="info"> On the Way </Badge>;
+      case 'in_queue': return <Badge variant="secondary"> In Queue </Badge>;
+      case 'assigned': return <Badge variant="secondary"> Assigned </Badge>;
       case 'cancelled': return <Badge variant="error"> Cancelled </Badge>;
       default: return <Badge> {status} </Badge>;
     }
   };
 
-  const getPaymentBadge = (status, method) => {
-    if (status === 'paid') {
-      return (
-        <Badge variant="success" className="gap-1">
-          <CheckCircle size={10} /> Paid {method && `(${method})`}
-        </Badge>
-      );
+  const getPaymentBadge = (status, method, amountDue) => {
+    switch (status) {
+      case PAYMENT_STATUS.PAID:
+      case PAYMENT_STATUS.PAID_CASH:
+        return (
+          <Badge variant="success" className="gap-1">
+            <Banknote size={10} /> Cash Paid
+          </Badge>
+        );
+      case PAYMENT_STATUS.PAID_UPI:
+        return (
+          <Badge variant="success" className="gap-1">
+            <CreditCard size={10} /> UPI Paid
+          </Badge>
+        );
+      case PAYMENT_STATUS.UPI_PENDING:
+        return (
+          <Badge variant="info" className="gap-1 bg-purple-100 text-purple-700 border-purple-200">
+            <CreditCard size={10} /> UPI Pending
+          </Badge>
+        );
+      case PAYMENT_STATUS.CASH_DUE:
+        return (
+          <Badge variant="warning" className="gap-1 bg-orange-100 text-orange-700 border-orange-200">
+            <Wallet size={10} /> Cash Due
+          </Badge>
+        );
+      case PAYMENT_STATUS.DELIVERED_UNPAID:
+        return (
+          <Badge variant="error" className="gap-1 bg-red-100 text-red-700 border-red-200">
+            <AlertCircle size={10} /> Unpaid
+          </Badge>
+        );
+      case PAYMENT_STATUS.PENDING:
+      default:
+        return (
+          <Badge variant="warning" className="gap-1">
+            <Clock size={10} /> Pending
+          </Badge>
+        );
     }
-    return (
-      <Badge variant="warning" className="gap-1">
-        <Clock size={10} /> Pending
-      </Badge>
-    );
+  };
+
+  // Helper to check if payment is unpaid
+  const isUnpaidStatus = (status) => {
+    return [PAYMENT_STATUS.PENDING, PAYMENT_STATUS.UPI_PENDING, PAYMENT_STATUS.CASH_DUE, PAYMENT_STATUS.DELIVERED_UNPAID].includes(status);
   };
 
   return (
@@ -177,13 +270,66 @@ export default function Orders() {
         </Button>
       </div>
 
+      {/* Outstanding Summary Section */}
+      {outstandingSummary && outstandingSummary.total_due > 0 && (
+        <div className="bg-gradient-to-br from-slate-800 to-slate-900 rounded-[32px] sm:rounded-[40px] p-6 sm:p-8 text-white shadow-2xl shadow-slate-900/20 relative overflow-hidden animate-in slide-in-from-top-4 duration-500">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
+          <div className="relative z-10">
+            <div className="flex items-center gap-2 mb-4">
+              <div className="p-2 bg-white/10 backdrop-blur-xl rounded-xl border border-white/10 shadow-lg"><IndianRupee size={18} /></div>
+              <span className="text-xs font-black uppercase tracking-[0.2em] opacity-70">Outstanding Summary</span>
+            </div>
+
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4 sm:gap-6">
+              {/* Total Due */}
+              <div className="bg-white/5 backdrop-blur-md rounded-2xl p-4 border border-white/10">
+                <div className="text-[10px] font-black uppercase opacity-60 mb-1">Total Due</div>
+                <div className="text-2xl sm:text-3xl font-black tracking-tighter">₹{outstandingSummary.total_due?.toLocaleString()}</div>
+                <div className="text-xs opacity-60 mt-1">{outstandingSummary.total_orders} orders</div>
+              </div>
+
+              {/* UPI Pending */}
+              <button
+                onClick={() => setFilter('upi-pending')}
+                className={`bg-purple-500/20 backdrop-blur-md rounded-2xl p-4 border border-purple-400/20 text-left transition-all hover:scale-[1.02] ${filter === 'upi-pending' ? 'ring-2 ring-purple-400' : ''}`}
+              >
+                <div className="text-[10px] font-black uppercase opacity-60 mb-1 flex items-center gap-1"><CreditCard size={10} /> UPI Pending</div>
+                <div className="text-xl sm:text-2xl font-black tracking-tighter">₹{outstandingSummary.upi_pending_amount?.toLocaleString()}</div>
+                <div className="text-xs opacity-60 mt-1">{outstandingSummary.upi_pending_orders} orders</div>
+              </button>
+
+              {/* Cash Due */}
+              <button
+                onClick={() => setFilter('cash-due')}
+                className={`bg-orange-500/20 backdrop-blur-md rounded-2xl p-4 border border-orange-400/20 text-left transition-all hover:scale-[1.02] ${filter === 'cash-due' ? 'ring-2 ring-orange-400' : ''}`}
+              >
+                <div className="text-[10px] font-black uppercase opacity-60 mb-1 flex items-center gap-1"><Wallet size={10} /> Cash Due</div>
+                <div className="text-xl sm:text-2xl font-black tracking-tighter">₹{outstandingSummary.cash_due_amount?.toLocaleString()}</div>
+                <div className="text-xs opacity-60 mt-1">{outstandingSummary.cash_due_orders} orders</div>
+              </button>
+
+              {/* Delivered Unpaid */}
+              <button
+                onClick={() => setFilter('unpaid')}
+                className={`bg-red-500/20 backdrop-blur-md rounded-2xl p-4 border border-red-400/20 text-left transition-all hover:scale-[1.02] ${filter === 'unpaid' ? 'ring-2 ring-red-400' : ''}`}
+              >
+                <div className="text-[10px] font-black uppercase opacity-60 mb-1 flex items-center gap-1"><AlertCircle size={10} /> Unpaid</div>
+                <div className="text-xl sm:text-2xl font-black tracking-tighter">₹{outstandingSummary.delivered_unpaid_amount?.toLocaleString()}</div>
+                <div className="text-xs opacity-60 mt-1">{outstandingSummary.delivered_unpaid_orders} orders</div>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Mobile Filter Bar */}
       <div className="lg:hidden flex overflow-x-auto pb-2 gap-2 no-scrollbar -mx-4 px-4 sticky top-0 bg-white/80 backdrop-blur-md z-10 py-2">
         {[
           { id: 'all', label: 'All', icon: Package },
           { id: 'pending', label: 'Pending', icon: Clock },
           { id: 'delivered', label: 'Done', icon: CheckCircle },
-          { id: 'pending-payment', label: 'Due', icon: AlertCircle }
+          { id: 'unpaid', label: 'Unpaid', icon: AlertCircle },
+          { id: 'paid', label: 'Paid', icon: CheckCircle }
         ].map((item) => (
           <button
             key={item.id}
@@ -211,7 +357,6 @@ export default function Orders() {
                 { id: 'all', label: 'All Orders', icon: Package },
                 { id: 'pending', label: 'Pending', icon: Clock },
                 { id: 'delivered', label: 'Delivered', icon: CheckCircle },
-                { id: 'pending-payment', label: 'Outstanding', icon: AlertCircle }
               ].map((item) => (
                 <button
                   key={item.id}
@@ -230,6 +375,40 @@ export default function Orders() {
               ))}
             </div>
 
+            {/* Payment Status Filters */}
+            <div className="mt-6 pt-6 border-t border-slate-100">
+              <h3 className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4 pl-2">Payment Status</h3>
+              <div className="space-y-1">
+                {[
+                  { id: 'paid', label: 'Paid', icon: CheckCircle, color: 'emerald' },
+                  { id: 'upi-pending', label: 'UPI Pending', icon: CreditCard, color: 'purple' },
+                  { id: 'cash-due', label: 'Cash Due', icon: Wallet, color: 'orange' },
+                  { id: 'unpaid', label: 'All Unpaid', icon: AlertCircle, color: 'red' },
+                ].map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => setFilter(item.id)}
+                    className={`w-full flex items-center justify-between px-4 py-3 rounded-2xl text-sm font-bold transition-all group ${filter === item.id
+                      ? `bg-${item.color}-50 text-${item.color}-600 shadow-inner`
+                      : 'text-slate-500 hover:bg-slate-50 hover:text-slate-800'
+                      }`}
+                    style={filter === item.id ? {
+                      backgroundColor: item.color === 'emerald' ? '#ecfdf5' : item.color === 'purple' ? '#faf5ff' : item.color === 'orange' ? '#fff7ed' : '#fef2f2',
+                      color: item.color === 'emerald' ? '#059669' : item.color === 'purple' ? '#9333ea' : item.color === 'orange' ? '#ea580c' : '#dc2626'
+                    } : {}}
+                  >
+                    <div className="flex items-center gap-3">
+                      <item.icon size={16} strokeWidth={filter === item.id ? 3 : 2} />
+                      {item.label}
+                    </div>
+                    {filter === item.id && <div className="w-1.5 h-1.5 rounded-full" style={{
+                      backgroundColor: item.color === 'emerald' ? '#10b981' : item.color === 'purple' ? '#a855f7' : item.color === 'orange' ? '#f97316' : '#ef4444'
+                    }}></div>}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="mt-8 pt-8 border-t border-slate-50">
               <div className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] mb-4 pl-2">Summary</div>
               <div className="p-5 bg-slate-50 rounded-2xl border border-slate-100">
@@ -244,7 +423,7 @@ export default function Orders() {
         <div className="flex-1 space-y-8">
 
           {/* Collection Dashboard Summary (Contextual) */}
-          {filter === 'pending-payment' && (
+          {['pending-payment', 'upi-pending', 'cash-due', 'unpaid'].includes(filter) && (
             <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 text-white shadow-2xl shadow-amber-500/20 relative overflow-hidden animate-in slide-in-from-top-4 duration-500">
               <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
               <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-8">
@@ -253,7 +432,7 @@ export default function Orders() {
                     <div className="p-2 bg-white/20 backdrop-blur-xl rounded-xl border border-white/20 shadow-lg"><IndianRupee size={20} /></div>
                     <span className="text-xs font-black uppercase tracking-[0.2em] opacity-80">Collection Dashboard</span>
                   </div>
-                  <div className="text-5xl sm:text-7xl font-black tracking-tighter mb-2 drop-shadow-sm">₹{filteredOrders.reduce((sum, o) => sum + (o.amount || 0), 0)}</div>
+                  <div className="text-5xl sm:text-7xl font-black tracking-tighter mb-2 drop-shadow-sm">₹{filteredOrders.reduce((sum, o) => sum + (o.amount || 0), 0).toLocaleString()}</div>
                   <p className="text-amber-100 font-medium text-lg">Pending collection across {filteredOrders.length} accounts</p>
                 </div>
                 <div className="flex flex-shrink-0 gap-4">
@@ -313,11 +492,14 @@ export default function Orders() {
                       <TableCell className="text-center">
                         <div className="text-lg font-black text-slate-900 leading-none mb-1">₹{order.amount}</div>
                         <div className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">{order.quantity} x {order.litre_size}L</div>
+                        {order.amount_due > 0 && (
+                          <div className="text-[10px] font-bold text-red-500 mt-1">Due: ₹{order.amount_due}</div>
+                        )}
                       </TableCell>
                       <TableCell>
                         <div className="flex flex-col gap-1.5 items-start">
                           {getStatusBadge(order.status)}
-                          {getPaymentBadge(order.payment_status, order.payment_method)}
+                          {getPaymentBadge(order.payment_status, order.payment_method, order.amount_due)}
                         </div>
                       </TableCell>
                       <TableCell className="pr-8 text-right">
@@ -341,7 +523,7 @@ export default function Orders() {
                   onClick={() => { setSelectedOrder(order); setIsDialogOpen(true); }}
                   className="bg-white p-5 rounded-[24px] border border-slate-100 shadow-sm active:scale-[0.98] transition-all relative overflow-hidden"
                 >
-                  <div className={`absolute top-0 left-0 w-1.5 h-full ${order.status === 'delivered' ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                  <div className={`absolute top-0 left-0 w-1.5 h-full ${order.status === 'delivered' ? 'bg-emerald-500' : isUnpaidStatus(order.payment_status) ? 'bg-red-500' : 'bg-amber-500'}`} />
                   <div className="flex justify-between items-start mb-6">
                     <div>
                       <div className="text-[10px] font-black text-slate-400 tracking-tighter bg-slate-100 px-2 py-1 rounded uppercase mb-2 w-fit">{order.order_id}</div>
@@ -355,11 +537,13 @@ export default function Orders() {
                       <div className="flex items-center gap-2 text-xs font-black text-slate-400">
                         <Droplets size={14} className="text-sky-500" /> {order.quantity} x {order.litre_size}L
                       </div>
-                      {getPaymentBadge(order.payment_status, order.payment_method)}
+                      {getPaymentBadge(order.payment_status, order.payment_method, order.amount_due)}
                     </div>
                     <div className="text-right">
                       <div className="text-3xl font-black text-slate-900 tracking-tighter leading-none">₹{order.amount}</div>
-                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">Total Due</div>
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
+                        {isUnpaidStatus(order.payment_status) ? 'Due' : 'Total'}
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -397,10 +581,18 @@ export default function Orders() {
 
                   {/* Contact Actions */}
                   <div className="grid grid-cols-2 gap-3">
-                    <a href={`tel:${selectedOrder.customer_phone}`} className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-xs shadow-sm active:scale-95 transition-transform">
+                    <a
+                      href={`tel:${selectedOrder.customer_phone?.startsWith('+') ? selectedOrder.customer_phone : '+91' + selectedOrder.customer_phone?.replace(/\D/g, '').replace(/^91/, '')}`}
+                      className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-xs shadow-sm active:scale-95 transition-transform"
+                    >
                       <PhoneCall size={14} /> Call
                     </a>
-                    <a href={`https://wa.me/${selectedOrder.customer_phone.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-50 border border-emerald-100 text-emerald-600 font-bold text-xs shadow-sm active:scale-95 transition-transform">
+                    <a
+                      href={`https://wa.me/91${selectedOrder.customer_phone?.replace(/\D/g, '').replace(/^91/, '')}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-50 border border-emerald-100 text-emerald-600 font-bold text-xs shadow-sm active:scale-95 transition-transform"
+                    >
                       <MessageCircle size={14} /> Chat
                     </a>
                   </div>
@@ -414,8 +606,12 @@ export default function Orders() {
                 {/* Order Stats */}
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-white border border-slate-100 p-4 rounded-2xl shadow-sm text-center">
-                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Total Due</div>
-                    <div className="text-2xl font-black text-slate-900">₹{selectedOrder.amount}</div>
+                    <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">
+                      {isUnpaidStatus(selectedOrder.payment_status) ? 'Amount Due' : 'Total'}
+                    </div>
+                    <div className={`text-2xl font-black ${isUnpaidStatus(selectedOrder.payment_status) ? 'text-red-600' : 'text-slate-900'}`}>
+                      ₹{selectedOrder.amount_due || selectedOrder.amount}
+                    </div>
                   </div>
                   <div className="bg-white border border-slate-100 p-4 rounded-2xl shadow-sm text-center">
                     <div className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1">Quantity</div>
@@ -423,10 +619,18 @@ export default function Orders() {
                   </div>
                 </div>
 
+                {/* Payment Status */}
+                <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl border border-slate-100">
+                  <span className="text-xs font-bold text-slate-500 flex items-center gap-2 uppercase tracking-wide">
+                    <IndianRupee size={14} /> Payment
+                  </span>
+                  {getPaymentBadge(selectedOrder.payment_status, selectedOrder.payment_method, selectedOrder.amount_due)}
+                </div>
+
                 {/* Notification Status */}
                 <div className="flex items-center justify-between p-3 bg-slate-50 rounded-xl border border-slate-100">
                   <span className="text-xs font-bold text-slate-500 flex items-center gap-2 uppercase tracking-wide">
-                    <Bell size={14} /> SMS Status
+                    <Bell size={14} /> Notification
                   </span>
                   <div className="flex items-center gap-2">
                     {selectedOrder.notification_status === 'failed' && (
@@ -447,35 +651,36 @@ export default function Orders() {
                   <div className="space-y-3">
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] text-center">Complete Order</p>
                     <div className="grid grid-cols-2 gap-3">
-                      <Button variant="primary" className="bg-emerald-500 hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid', 'cash')}>
+                      <Button variant="primary" className="bg-emerald-500 hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_cash', 'cash')}>
                         <span className="text-xs font-medium opacity-90">Payment: Cash</span>
                         <span className="text-sm font-black">Delivered</span>
                       </Button>
-                      <Button variant="accent" className="bg-sky-500 hover:bg-sky-600 shadow-lg shadow-sky-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid', 'upi')}>
+                      <Button variant="accent" className="bg-sky-500 hover:bg-sky-600 shadow-lg shadow-sky-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_upi', 'upi')}>
                         <span className="text-xs font-medium opacity-90">Payment: UPI</span>
                         <span className="text-sm font-black">Delivered</span>
                       </Button>
                     </div>
-                    <Button variant="secondary" className="w-full rounded-xl h-12 font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered')}>
+                    <Button variant="secondary" className="w-full rounded-xl h-12 font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'delivered_unpaid')}>
                       Mark Delivered Only (Unpaid)
                     </Button>
                   </div>
                 )}
 
-                {selectedOrder.status === 'delivered' && selectedOrder.payment_status === 'pending' && (
+                {selectedOrder.status === 'delivered' && isUnpaidStatus(selectedOrder.payment_status) && (
                   <div className="space-y-3">
-                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] text-center">Settle Payment</p>
+                    <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] text-center">Confirm Payment</p>
                     <div className="grid grid-cols-2 gap-3">
-                      <Button variant="primary" className="bg-emerald-500 h-12 rounded-xl font-bold border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid', 'cash')}>
-                        Paid (Cash)
+                      <Button variant="primary" className="bg-emerald-500 h-12 rounded-xl font-bold border-none gap-2" onClick={() => confirmPayment(selectedOrder.order_id, 'paid_cash')}>
+                        <Banknote size={16} /> Cash Received
                       </Button>
-                      <Button variant="accent" className="bg-sky-500 h-12 rounded-xl font-bold border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid', 'upi')}>
-                        Paid (UPI)
+                      <Button variant="accent" className="bg-purple-500 hover:bg-purple-600 h-12 rounded-xl font-bold border-none gap-2" onClick={() => confirmPayment(selectedOrder.order_id, 'paid_upi')}>
+                        <CreditCard size={16} /> UPI Received
                       </Button>
                     </div>
                   </div>
                 )}
-                {selectedOrder.status === 'delivered' && selectedOrder.payment_status === 'paid' && (
+
+                {selectedOrder.status === 'delivered' && [PAYMENT_STATUS.PAID, PAYMENT_STATUS.PAID_CASH, PAYMENT_STATUS.PAID_UPI].includes(selectedOrder.payment_status) && (
                   <div className="text-center py-2">
                     <div className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-50 rounded-full text-emerald-600 font-bold text-sm">
                       <CheckCircle size={16} /> Order Completed

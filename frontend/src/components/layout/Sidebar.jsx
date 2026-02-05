@@ -1,11 +1,60 @@
-import React from 'react';
-import { useLocation, Link } from 'react-router-dom';
-import { Package, TruckIcon, Droplets, Settings, LogOut, ChevronRight, Users } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { useLocation, Link, useNavigate } from 'react-router-dom';
+import { Package, TruckIcon, Droplets, Settings, LogOut, Users, Loader2 } from 'lucide-react';
 import { useCompanyName } from '../../context/AppContext';
+import api, { getVendor, removeAuthToken } from '../../api/axios';
+import { toast } from 'sonner';
 
 const Sidebar = ({ className = "" }) => {
     const location = useLocation();
+    const navigate = useNavigate();
     const { companyName } = useCompanyName();
+    const [vendor, setVendor] = useState(null);
+    const [loggingOut, setLoggingOut] = useState(false);
+
+    // Load vendor info from localStorage or API
+    useEffect(() => {
+        const storedVendor = getVendor();
+        if (storedVendor) {
+            setVendor(storedVendor);
+        } else {
+            // Fetch from API if not in localStorage
+            loadVendorInfo();
+        }
+    }, []);
+
+    const loadVendorInfo = async () => {
+        try {
+            const response = await api.get('/auth/me');
+            setVendor(response.data);
+        } catch (error) {
+            console.error('Error loading vendor info:', error);
+        }
+    };
+
+    const handleLogout = async () => {
+        try {
+            setLoggingOut(true);
+            await api.post('/auth/logout');
+            toast.success('Logged out successfully');
+        } catch (error) {
+            console.error('Logout error:', error);
+            // Still logout locally even if API fails
+        } finally {
+            removeAuthToken();
+            navigate('/login');
+        }
+    };
+
+    // Get initials from business name
+    const getInitials = (name) => {
+        if (!name) return 'TC';
+        const words = name.split(' ').filter(w => w.length > 0);
+        if (words.length >= 2) {
+            return (words[0][0] + words[1][0]).toUpperCase();
+        }
+        return name.substring(0, 2).toUpperCase();
+    };
 
     // Navigation Items
     const navItems = [
@@ -21,8 +70,8 @@ const Sidebar = ({ className = "" }) => {
             {/* Brand Section */}
             <div className="p-6 border-b border-slate-800">
                 <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-gradient-to-br from-sky-500 to-blue-600 rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/20">
-                        <Droplets className="text-white" size={20} fill="currentColor" />
+                    <div className="w-14 h-14 bg-white rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/20 overflow-hidden">
+                        <img src="/logo.png" alt="Logo" className="w-full h-full object-contain" />
                     </div>
                     <div>
                         <h1 className="text-lg font-bold tracking-tight text-white">{companyName}</h1>
@@ -71,15 +120,37 @@ const Sidebar = ({ className = "" }) => {
 
             {/* User / Footer */}
             <div className="p-4 border-t border-slate-800 bg-slate-900/50">
-                <div className="flex items-center gap-3 p-2 rounded-xl hover:bg-slate-800 transition-colors cursor-pointer group">
-                    <div className="w-10 h-10 rounded-full bg-slate-700 flex items-center justify-center border border-slate-600">
-                        <span className="text-sm font-bold text-slate-300">AD</span>
+                <div className="flex items-center gap-3 p-2">
+                    {/* Avatar */}
+                    <div className="w-10 h-10 rounded-full bg-gradient-to-br from-sky-500 to-emerald-500 flex items-center justify-center shadow-lg">
+                        <span className="text-sm font-bold text-white">
+                            {getInitials(vendor?.business_name)}
+                        </span>
                     </div>
+
+                    {/* Vendor Info */}
                     <div className="flex-1 overflow-hidden">
-                        <p className="text-sm font-medium text-white truncate">Admin User</p>
-                        <p className="text-xs text-slate-500 truncate">admin@thannicanuuu.com</p>
+                        <p className="text-sm font-medium text-white truncate">
+                            {vendor?.business_name || 'Loading...'}
+                        </p>
+                        <p className="text-xs text-slate-500 truncate">
+                            {vendor?.phone || ''}
+                        </p>
                     </div>
-                    <LogOut size={16} className="text-slate-500 group-hover:text-red-400 transition-colors" />
+
+                    {/* Logout Button */}
+                    <button
+                        onClick={handleLogout}
+                        disabled={loggingOut}
+                        className="p-2 rounded-lg hover:bg-red-500/10 text-slate-500 hover:text-red-400 transition-all disabled:opacity-50"
+                        title="Logout"
+                    >
+                        {loggingOut ? (
+                            <Loader2 size={18} className="animate-spin" />
+                        ) : (
+                            <LogOut size={18} />
+                        )}
+                    </button>
                 </div>
             </div>
         </aside>

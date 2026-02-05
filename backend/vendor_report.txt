@@ -1,0 +1,79 @@
+﻿======================================================================
+THANNI CANUUU - VENDOR DATABASE REPORT
+Generated: 2026-02-04 03:10:20
+======================================================================
+
+Total Registered Vendors: 5
+----------------------------------------------------------------------
+
+[VENDOR 1]
+  Vendor ID    : 698204fa7995aa2742b439d0
+  Name         : N/A
+  Business     : Kumar Water Supply
+  Phone        : +919876543210
+  Active       : Yes
+  Created      : 2026-02-03T14:23:54.524082+00:00
+  Active Logins: 0
+  Data:
+    - Orders   : 86
+    - Customers: 8
+    - Staff    : 4
+
+[VENDOR 2]
+  Vendor ID    : 69820583c9486dbe5be440d4
+  Name         : N/A
+  Business     : KWD Cans
+  Phone        : +918848961710
+  Active       : Yes
+  Created      : 2026-02-03T14:26:11.856052+00:00
+  Active Logins: 0
+  Data:
+    - Orders   : 0
+    - Customers: 0
+    - Staff    : 0
+
+[VENDOR 3]
+  Vendor ID    : 69822cc6c9486dbe5be440e7
+  Name         : N/A
+  Business     : Hema Water Supply
+  Phone        : +918870828430
+  Active       : Yes
+  Created      : 2026-02-03T17:13:42.772848+00:00
+  Active Logins: 0
+  Data:
+    - Orders   : 0
+    - Customers: 0
+    - Staff    : 0
+
+[VENDOR 4]
+  Vendor ID    : 698265b3e56db24fa3d91ca7
+  Name         : Lord Shiva
+  Business     : Basil Cans
+  Phone        : +919349295608
+  Active       : Yes
+  Created      : 2026-02-03T21:16:35.737606+00:00
+  Active Logins: 0
+  Data:
+    - Orders   : 0
+    - Customers: 0
+    - Staff    : 0
+
+[VENDOR 5]
+  Vendor ID    : 69826b2999f1758593684b21
+  Name         : Kumar
+  Business     : nundro
+  Phone        : +918809828918
+  Active       : Yes
+  Created      : 2026-02-03T21:39:53.875454+00:00
+  Active Logins: 0
+  Data:
+    - Orders   : 0
+    - Customers: 0
+    - Staff    : 0
+
+======================================================================
+ACTIVE LOGIN SESSIONS
+----------------------------------------------------------------------
+No active sessions found.
+
+======================================================================

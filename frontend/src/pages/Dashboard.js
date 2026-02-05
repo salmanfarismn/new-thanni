@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { api } from '../context/AppContext';
+import { getVendor } from '../api/axios';
 import { Package, TruckIcon, IndianRupee, Droplets, CheckCircle, Clock, AlertCircle, Calendar, Filter, TrendingUp, Users, ArrowUpRight, Zap, Bell, X } from 'lucide-react';
 import { toast } from 'sonner';
 import Card, { GlassCard } from '../components/ui/card';
@@ -26,8 +27,15 @@ export default function Dashboard() {
   const [newOrderNotification, setNewOrderNotification] = useState(null);
   const [showNotification, setShowNotification] = useState(false);
 
+  // Greeting state - personalized for vendor
+  const [greeting, setGreeting] = useState({
+    greeting: 'Good ' + (new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 18 ? 'Afternoon' : 'Evening'),
+    vendor_name: getVendor()?.name || getVendor()?.business_name || 'Admin'
+  });
+
   useEffect(() => {
     loadData();
+    loadGreeting();
     const interval = setInterval(loadData, 30000);
     return () => clearInterval(interval);
   }, []);
@@ -35,6 +43,19 @@ export default function Dashboard() {
   useEffect(() => {
     loadSalesData();
   }, [salesFilter, customStartDate, customEndDate]);
+
+  const loadGreeting = async () => {
+    try {
+      const res = await api.get('/auth/greeting');
+      setGreeting({
+        greeting: res.data.greeting,
+        vendor_name: res.data.vendor_name
+      });
+    } catch (error) {
+      // Fallback to localStorage greeting already set in initial state
+      console.log('Using fallback greeting');
+    }
+  };
 
   const loadData = async () => {
     try {
@@ -331,7 +352,7 @@ export default function Dashboard() {
             {new Date().toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' })}
           </div>
           <h1 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight">
-            Good {new Date().getHours() < 12 ? 'Morning' : new Date().getHours() < 18 ? 'Afternoon' : 'Evening'}, Admin
+            {greeting.greeting}, {greeting.vendor_name}
           </h1>
           <p className="text-slate-500 font-medium text-sm sm:text-base">Here's what's happening with your deliveries today.</p>
         </div>

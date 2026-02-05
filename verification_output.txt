@@ -1,0 +1,78 @@
+﻿======================================================================
+ThanniCanuuu - Sample Data Verification
+======================================================================
+
+.venv\Scripts\python.exe : 
+Traceback (most recent call 
+last):
+At line:1 char:1
++ .venv\Scripts\python.exe 
+verify_data.py 2>&1 | 
+Out-File -FilePath ver ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          
+    : NotSpecified: (Trace  
+  back (most recent call    
+ last)::String) [], Remo    
+teException
+    + FullyQualifiedErrorId 
+    : NativeCommandError
+ 
+  File "C:\Users\Abinash\Dow
+nloads\ThanniCanuuu\verify_d
+ata.py", line 18, in 
+<module>
+    print("\U0001f4e6 
+ORDERS:")
+    ~~~~~^^^^^^^^^^^^^^
+  File "C:\Program Files\Win
+dowsApps\PythonSoftwareFound
+ation.Python.3.13_3.13.2544.
+0_x64__qbz5n2kfra8p0\Lib\enc
+odings\cp1252.py", line 19, 
+in encode
+    return codecs.charmap_en
+code(input,self.errors,encod
+ing_table)[0]
+           ~~~~~~~~~~~~~~~~~
+~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^
+UnicodeEncodeError: 
+'charmap' codec can't 
+encode character 
+'\U0001f4e6' in position 0: 
+character maps to 
+<undefined>
+
+During handling of the 
+above exception, another 
+exception occurred:
+
+Traceback (most recent call 
+last):
+  File "C:\Users\Abinash\Dow
+nloads\ThanniCanuuu\verify_d
+ata.py", line 71, in 
+<module>
+    print(f"\u274c Error: 
+{str(e)}")
+    
+~~~~~^^^^^^^^^^^^^^^^^^^^^^^
+  File "C:\Program Files\Win
+dowsApps\PythonSoftwareFound
+ation.Python.3.13_3.13.2544.
+0_x64__qbz5n2kfra8p0\Lib\enc
+odings\cp1252.py", line 19, 
+in encode
+    return codecs.charmap_en
+code(input,self.errors,encod
+ing_table)[0]
+           ~~~~~~~~~~~~~~~~~
+~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+^^^^^^^^^^
+UnicodeEncodeError: 
+'charmap' codec can't 
+encode character '\u274c' 
+in position 0: character 
+maps to <undefined>

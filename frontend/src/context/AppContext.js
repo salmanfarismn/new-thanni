@@ -1,13 +1,8 @@
 import { useState, useEffect, createContext, useContext } from 'react';
-import axios from 'axios';
+import api from '../api/axios';  // Use the configured axios instance
 
-// API Configuration
-const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
-const API = `${BACKEND_URL}/api`;
-
-export const api = axios.create({
-    baseURL: API,
-});
+// Re-export api for backward compatibility
+export { default as api } from '../api/axios';
 
 // Company Name Context
 const CompanyNameContext = createContext();

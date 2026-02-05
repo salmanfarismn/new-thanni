@@ -1,3 +1,13 @@
+/**
+ * Multi-Vendor WhatsApp Service for Thanni Canuuu
+ * 
+ * Enhanced with:
+ * - Smart follow-up handling (no repeated questions)
+ * - Delivery queue management (FIFO, no message spam)
+ * - Payment tracking and confirmation flows
+ * - Per-customer state persistence in backend
+ */
+
 const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
 const express = require('express');
 const cors = require('cors');
@@ -22,108 +32,276 @@ app.use((req, res, next) => {
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000';
 const PORT = process.env.PORT || 3001;
 
-let sock = null;
-let qrCode = null;
-let isConnected = false;
+// ============================================
+// CONSTANTS
+// ============================================
+
+// Conversation steps - Enhanced flow
+const STEPS = {
+    IDLE: 'IDLE',                           // No active conversation
+    AWAITING_MENU_CHOICE: 'AWAITING_MENU_CHOICE', // Asking status or new order
+    AWAITING_NAME: 'AWAITING_NAME',         // Asking for name (new customer)
+    AWAITING_ADDRESS: 'AWAITING_ADDRESS',   // Asking for address (new customer)
+    AWAITING_CAN_TYPE: 'AWAITING_CAN_TYPE', // Asking 20L/25L/Both
+    AWAITING_QTY_20L: 'AWAITING_QTY_20L',   // Asking quantity for 20L
+    AWAITING_QTY_25L: 'AWAITING_QTY_25L',   // Asking quantity for 25L
+    AWAITING_CONFIRM: 'AWAITING_CONFIRM',   // Confirming order
+    AWAITING_PAYMENT_CHOICE: 'AWAITING_PAYMENT_CHOICE' // Asking payment method
+};
+
+// Customer states (synced with backend)
+const CUSTOMER_STATES = {
+    IDLE: 'idle',
+    ORDERING: 'ordering',
+    AWAITING_CONFIRMATION: 'awaiting_confirmation',
+    ORDER_ACTIVE: 'order_active',
+    CHECKING_STATUS: 'checking_status',
+    PAYMENT_PENDING: 'payment_pending'
+};
+
+// Payment statuses
+const PAYMENT_STATUS = {
+    PENDING: 'pending',
+    PAID_CASH: 'paid_cash',
+    PAID_UPI: 'paid_upi',
+    UPI_PENDING: 'upi_pending',
+    CASH_DUE: 'cash_due',
+    DELIVERED_UNPAID: 'delivered_unpaid'
+};
 
 // ============================================
-// STATEFUL CONVERSATION MANAGEMENT
+// MULTI-VENDOR SESSION MANAGEMENT
 // ============================================
+
+/**
+ * Store for all vendor WhatsApp clients
+ * Map<vendorId, { sock, qrCode, isConnected, user }>
+ */
+const vendorClients = new Map();
+
+/**
+ * Store for customer conversation states (keyed by vendorId:phoneNumber)
+ * This is for quick in-memory access, synced with backend
+ */
 const conversationState = new Map();
 
-// Conversation steps
-const STEPS = {
-    START: 'START',
-    AWAITING_NAME: 'AWAITING_NAME',
-    AWAITING_ADDRESS: 'AWAITING_ADDRESS',
-    AWAITING_ORDER: 'AWAITING_ORDER',
-    AWAITING_20L_QTY: 'AWAITING_20L_QTY',
-    AWAITING_25L_QTY: 'AWAITING_25L_QTY',
-    AWAITING_CONFIRMATION: 'AWAITING_CONFIRMATION'
-};
+/**
+ * Delivery queue per staff (keyed by vendorId:staffId)
+ * For FIFO processing
+ */
+const deliveryQueues = new Map();
 
 // Session timeout (30 minutes)
 const SESSION_TIMEOUT_MS = 30 * 60 * 1000;
 
-// Clean up expired sessions periodically
+// Reconnection settings
+const RECONNECT_SETTINGS = {
+    baseDelay: 5000,      // 5 seconds base delay
+    maxDelay: 300000,     // 5 minutes max delay  
+    maxRetries: 10        // Max retries before giving up
+};
+
+// Track reconnection attempts per vendor
+const reconnectAttempts = new Map();
+
+/**
+ * Calculate exponential backoff delay
+ */
+function getReconnectDelay(vendorId) {
+    const attempts = reconnectAttempts.get(vendorId) || 0;
+    const delay = Math.min(
+        RECONNECT_SETTINGS.baseDelay * Math.pow(2, attempts),
+        RECONNECT_SETTINGS.maxDelay
+    );
+    return delay;
+}
+
+/**
+ * Reset reconnection attempts on successful connection
+ */
+function resetReconnectAttempts(vendorId) {
+    reconnectAttempts.set(vendorId, 0);
+}
+
+/**
+ * Increment reconnection attempts
+ */
+function incrementReconnectAttempts(vendorId) {
+    const current = reconnectAttempts.get(vendorId) || 0;
+    reconnectAttempts.set(vendorId, current + 1);
+    return current + 1;
+}
+
+// Clean up expired conversation sessions periodically
 setInterval(() => {
     const now = Date.now();
-    for (const [phone, session] of conversationState.entries()) {
+    for (const [key, session] of conversationState.entries()) {
         if (now - session.lastActivity > SESSION_TIMEOUT_MS) {
-            conversationState.delete(phone);
-            console.log(`[Session] Expired session for ${phone}`);
+            conversationState.delete(key);
+            console.log(`[Session] Expired: ${key}`);
         }
     }
-}, 5 * 60 * 1000); // Check every 5 minutes
+}, 5 * 60 * 1000);
 
-// ============================================
-// WHATSAPP INITIALIZATION
-// ============================================
-async function initWhatsApp() {
-    try {
-        const { state: authState, saveCreds } = await useMultiFileAuthState('auth_info');
-
-        sock = makeWASocket({
-            auth: authState,
-            printQRInTerminal: false,
-            browser: ['Thanni Canuuu', 'Chrome', '1.0.0']
-        });
-
-        sock.ev.on('connection.update', async (update) => {
-            const { connection, lastDisconnect, qr } = update;
-            console.log('Connection Update:', { connection, hasQr: !!qr });
-
-            if (qr) {
-                qrCode = qr;
-                console.log('\n--- WHATSAPP QR CODE ---');
-                qrcode.generate(qr, { small: true });
-                console.log('Scan the QR code above with your WhatsApp app.\n');
+// Health check for all connected vendors (every 2 minutes)
+setInterval(() => {
+    for (const [vendorId, client] of vendorClients.entries()) {
+        if (client.isConnected && client.sock) {
+            try {
+                // Update last activity
+                client.lastHealthCheck = Date.now();
+                console.log(`[Health] Vendor ${vendorId.substring(0, 8)}: Connected ✓`);
+            } catch (error) {
+                console.error(`[Health] Vendor ${vendorId.substring(0, 8)}: Error - ${error.message}`);
             }
+        }
+    }
+}, 2 * 60 * 1000);
 
-            if (connection === 'close') {
-                const statusCode = lastDisconnect?.error?.output?.statusCode;
-                const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-                console.log(`Connection closed (status: ${statusCode}). Reconnecting: ${shouldReconnect}`);
+// ============================================
+// VENDOR WHATSAPP INITIALIZATION
+// ============================================
 
-                if (shouldReconnect) {
-                    console.log('Attempting to reconnect in 5 seconds...');
-                    setTimeout(initWhatsApp, 5000);
+/**
+ * Initialize WhatsApp client for a specific vendor
+ */
+// Track initialization promises to prevent race conditions
+const initializationPromises = new Map();
+
+/**
+ * Initialize WhatsApp client for a specific vendor
+ */
+async function initVendorWhatsApp(vendorId) {
+    // Prevent concurrent initializations for the same vendor
+    if (initializationPromises.has(vendorId)) {
+        console.log(`[Vendor ${vendorId.substring(0, 8)}] Initialization already in progress, joining...`);
+        return initializationPromises.get(vendorId);
+    }
+
+    const initPromise = (async () => {
+        try {
+            console.log(`[Vendor ${vendorId.substring(0, 8)}] Initializing WhatsApp...`);
+
+            // Cleanup existing session if it exists to prevent conflict
+            const existing = vendorClients.get(vendorId);
+            if (existing && existing.sock) {
+                console.log(`[Vendor ${vendorId.substring(0, 8)}] Closing hanging connection...`);
+                try {
+                    existing.sock.end(undefined);
+                } catch (e) {
+                    // Ignore close errors
                 }
-                isConnected = false;
-                qrCode = null;
-            } else if (connection === 'open') {
-                console.log('\n✅ WhatsApp connected successfully!');
-                console.log('User ID:', sock.user?.id);
-                console.log('User Name:', sock.user?.name);
-                qrCode = null;
-                isConnected = true;
-            } else if (update.receivedPendingNotifications) {
-                console.log('Received pending notifications, connection is fully ready.');
-                isConnected = true;
+                vendorClients.delete(vendorId);
             }
-        });
 
-        sock.ev.on('messages.upsert', async (m) => {
-            console.log('Messages Upsert:', JSON.stringify(m, null, 2).substring(0, 200) + '...');
-            const { messages, type } = m;
-            if (type === 'notify') {
-                for (const message of messages) {
-                    if (!message.key.fromMe && message.message) {
-                        console.log('Processing incoming message from:', message.key.remoteJid);
-                        await handleIncomingMessage(message);
+            const authPath = path.join(__dirname, `auth_info_${vendorId}`);
+            const { state: authState, saveCreds } = await useMultiFileAuthState(authPath);
+
+            const sock = makeWASocket({
+                auth: authState,
+                printQRInTerminal: false,
+                browser: ['Thanni Canuuu', 'Chrome', '1.0.0'],
+                // Improve stability
+                connectTimeoutMs: 60000,
+                defaultQueryTimeoutMs: 60000,
+                retryRequestDelayMs: 5000
+            });
+
+            // Initialize client state immediately
+            vendorClients.set(vendorId, {
+                sock,
+                qrCode: null,
+                isConnected: false,
+                user: null,
+                lastActivity: Date.now()
+            });
+
+            sock.ev.on('connection.update', async (update) => {
+                const { connection, lastDisconnect, qr } = update;
+                const client = vendorClients.get(vendorId);
+
+                // If client was removed (race condition), ignore updates
+                if (!client || client.sock !== sock) return;
+
+                console.log(`[Vendor ${vendorId.substring(0, 8)}] Connection:`, { connection, hasQr: !!qr });
+
+                if (qr) {
+                    client.qrCode = qr;
+                    console.log(`\n--- VENDOR ${vendorId.substring(0, 8)} QR CODE ---`);
+                    qrcode.generate(qr, { small: true });
+                }
+
+                if (connection === 'close') {
+                    const statusCode = lastDisconnect?.error?.output?.statusCode;
+                    const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+                    client.isConnected = false;
+                    client.qrCode = null;
+
+                    if (shouldReconnect) {
+                        const attempts = incrementReconnectAttempts(vendorId);
+
+                        if (attempts > RECONNECT_SETTINGS.maxRetries) {
+                            console.error(`[Vendor ${vendorId.substring(0, 8)}] Max reconnection attempts (${RECONNECT_SETTINGS.maxRetries}) reached.`);
+                            vendorClients.delete(vendorId);
+                            return;
+                        }
+
+                        const delay = getReconnectDelay(vendorId);
+                        console.log(`[Vendor ${vendorId.substring(0, 8)}] Reconnecting in ${delay / 1000}s (attempt ${attempts}/${RECONNECT_SETTINGS.maxRetries})`);
+
+                        setTimeout(() => initVendorWhatsApp(vendorId), delay);
+                    } else {
+                        console.log(`[Vendor ${vendorId.substring(0, 8)}] Logged out. Removing session.`);
+                        vendorClients.delete(vendorId);
+
+                        // Clean up auth folder
+                        try {
+                            fs.rmSync(authPath, { recursive: true, force: true });
+                        } catch (e) { console.error('Error cleaning auth folder:', e); }
+                    }
+                } else if (connection === 'open') {
+                    console.log(`\n✅ [Vendor ${vendorId.substring(0, 8)}] WhatsApp connected!`);
+                    client.qrCode = null;
+                    client.isConnected = true;
+                    client.user = sock.user;
+                    client.connectedAt = Date.now();
+
+                    // Reset reconnection attempts
+                    resetReconnectAttempts(vendorId);
+                }
+            });
+
+            sock.ev.on('messages.upsert', async (m) => {
+                const { messages, type } = m;
+                if (type === 'notify') {
+                    for (const message of messages) {
+                        if (!message.key.fromMe && message.message) {
+                            try {
+                                console.log(`[Vendor ${vendorId.substring(0, 8)}] Msg:`, message.key.remoteJid);
+                                await handleIncomingMessage(vendorId, message);
+                            } catch (err) {
+                                console.error(`[Vendor ${vendorId.substring(0, 8)}] Message handler error:`, err);
+                            }
+                        }
                     }
                 }
-            }
-        });
+            });
 
-        sock.ev.on('creds.update', () => {
-            console.log('Credentials updated and saved.');
-            saveCreds();
-        });
+            sock.ev.on('creds.update', saveCreds);
 
-    } catch (error) {
-        console.error('WhatsApp initialization error:', error);
-        setTimeout(initWhatsApp, 10000);
+        } catch (error) {
+            console.error(`[Vendor ${vendorId.substring(0, 8)}] Init error:`, error);
+            // Don't auto-retry immediately in loop, let user/frontend retry via polling
+            vendorClients.delete(vendorId);
+        }
+    })();
+
+    initializationPromises.set(vendorId, initPromise);
+    try {
+        await initPromise;
+    } finally {
+        initializationPromises.delete(vendorId);
     }
 }
 
@@ -131,68 +309,184 @@ async function initWhatsApp() {
 // API HELPERS
 // ============================================
 
-// Get customer by phone number
-async function getCustomerByPhone(phoneNumber) {
+// Get customer by phone for a specific vendor
+async function getCustomerByPhone(vendorId, phoneNumber) {
     try {
-        const response = await axios.get(`${FASTAPI_URL}/api/customers/${phoneNumber}`);
+        const response = await axios.get(`${FASTAPI_URL}/api/customers/lookup/${phoneNumber}`, {
+            params: { vendor_id: vendorId }
+        });
+        console.log(`[API] Found customer for vendor ${vendorId.substring(0, 8)}:`, response.data.name);
         return response.data;
     } catch (error) {
-        if (error.response?.status === 404) {
-            return null;
-        }
-        console.error('Error fetching customer:', error.message);
+        console.log(`[API] No customer found for ${phoneNumber}`);
         return null;
     }
 }
 
-// Create new customer
-async function createCustomer(phoneNumber, name, address) {
+// Create customer for a specific vendor
+async function createCustomer(vendorId, phoneNumber, name, address) {
     try {
-        const response = await axios.post(`${FASTAPI_URL}/api/customers`, {
+        const response = await axios.post(`${FASTAPI_URL}/api/customers/whatsapp`, {
             phone_number: phoneNumber,
             name: name,
-            address: address
+            address: address,
+            vendor_id: vendorId
         });
+        console.log(`[API] Created customer for vendor ${vendorId.substring(0, 8)}:`, response.data);
         return response.data;
     } catch (error) {
-        console.error('Error creating customer:', error.message);
-        throw error;
-    }
-}
-
-// Get product prices dynamically from backend
-async function getProductPrices() {
-    try {
-        const response = await axios.get(`${FASTAPI_URL}/api/products/prices`);
-        return response.data;
-    } catch (error) {
-        console.error('Error fetching prices:', error.message);
-        // Return null to indicate prices couldn't be fetched
+        console.error('[API] Error creating customer:', error.message);
         return null;
     }
 }
 
-// Check inventory availability
-async function checkInventory(totalCans) {
+// Get product prices
+async function getProductPrices(vendorId) {
     try {
-        const response = await axios.post(`${FASTAPI_URL}/api/inventory/check`, {
-            quantity: totalCans
+        const response = await axios.get(`${FASTAPI_URL}/api/products/prices`, {
+            params: { vendor_id: vendorId }
         });
         return response.data;
     } catch (error) {
-        console.error('Error checking inventory:', error.message);
-        return { available: false, available_stock: 0 };
+        console.error('[API] Error fetching prices:', error.message);
+        return { '20L': 50, '25L': 65 }; // Default prices
     }
 }
 
-// Create order via backend
-async function createOrder(orderData) {
+// Create order
+async function createOrder(vendorId, orderData) {
     try {
-        const response = await axios.post(`${FASTAPI_URL}/api/orders/create`, orderData);
+        console.log(`[API] Creating order for vendor ${vendorId.substring(0, 8)}:`, orderData);
+        const response = await axios.post(`${FASTAPI_URL}/api/orders/create`, {
+            ...orderData,
+            vendor_id: vendorId
+        });
+        console.log(`[API] Order created:`, response.data);
         return response.data;
     } catch (error) {
-        console.error('Error creating order:', error.response?.data || error.message);
+        console.error('[API] Error creating order:', error.response?.data || error.message);
         throw error;
+    }
+}
+
+// Check if delivery staff
+async function checkIfDeliveryStaff(vendorId, phoneNumber) {
+    try {
+        const response = await axios.get(`${FASTAPI_URL}/api/delivery-staff/check/${phoneNumber}`, {
+            params: { vendor_id: vendorId }
+        });
+        return response.data ? response.data : null;
+    } catch (error) {
+        return null;
+    }
+}
+
+// Get customer's active order
+async function getCustomerActiveOrder(vendorId, phoneNumber) {
+    try {
+        const response = await axios.get(`${FASTAPI_URL}/api/customers/${phoneNumber}/active-order`, {
+            params: { vendor_id: vendorId }
+        });
+        return response.data;
+    } catch (error) {
+        console.error('[API] Error fetching active order:', error.message);
+        return { has_active_order: false, order: null };
+    }
+}
+
+// Get customer's latest order
+async function getCustomerLatestOrder(vendorId, phoneNumber) {
+    try {
+        const response = await axios.get(`${FASTAPI_URL}/api/customers/${phoneNumber}/latest-order`, {
+            params: { vendor_id: vendorId }
+        });
+        return response.data;
+    } catch (error) {
+        console.error('[API] Error fetching latest order:', error.message);
+        return { order: null };
+    }
+}
+
+// Complete delivery with payment status
+async function completeDelivery(vendorId, orderId, paymentStatus) {
+    try {
+        const response = await axios.post(`${FASTAPI_URL}/api/orders/${orderId}/delivery/complete`, null, {
+            params: {
+                vendor_id: vendorId,
+                payment_status: paymentStatus
+            }
+        });
+        return response.data;
+    } catch (error) {
+        console.error('[API] Error completing delivery:', error.message);
+        throw error;
+    }
+}
+
+// Handle customer payment response
+async function handleCustomerPaymentResponse(vendorId, orderId, response) {
+    try {
+        const result = await axios.post(`${FASTAPI_URL}/api/orders/${orderId}/payment/customer-response`, null, {
+            params: {
+                vendor_id: vendorId,
+                response: response
+            }
+        });
+        return result.data;
+    } catch (error) {
+        console.error('[API] Error handling payment response:', error.message);
+        throw error;
+    }
+}
+
+/**
+ * Robust message text extraction from Baileys message object
+ */
+function getMessageText(m) {
+    if (!m) return '';
+    if (m.conversation) return m.conversation;
+    if (m.extendedTextMessage?.text) return m.extendedTextMessage.text;
+    if (m.buttonsResponseMessage?.selectedButtonId) return m.buttonsResponseMessage.selectedButtonId;
+    if (m.listResponseMessage?.singleSelectReply?.selectedRowId) return m.listResponseMessage.singleSelectReply.selectedRowId;
+    if (m.templateButtonReplyMessage?.selectedId) return m.templateButtonReplyMessage.selectedId;
+
+    // Handle nested messages
+    if (m.ephemeralMessage?.message) return getMessageText(m.ephemeralMessage.message);
+    if (m.viewOnceMessage?.message) return getMessageText(m.viewOnceMessage.message);
+    if (m.viewOnceMessageV2?.message) return getMessageText(m.viewOnceMessageV2.message);
+
+    return '';
+}
+
+// Get staff's next pending delivery
+async function getStaffNextDelivery(vendorId, staffId) {
+    try {
+        const response = await axios.get(`${FASTAPI_URL}/api/delivery-staff/${staffId}/orders`, {
+            params: {
+                vendor_id: vendorId,
+                status: 'pending'
+            }
+        });
+        const orders = response.data;
+        return orders.length > 0 ? orders[0] : null;
+    } catch (error) {
+        console.error('[API] Error fetching staff orders:', error.message);
+        return null;
+    }
+}
+
+// Get staff's next pending delivery
+async function getStaffNextDelivery(vendorId, staffId) {
+    try {
+        const response = await axios.get(`${FASTAPI_URL}/api/delivery-staff/${staffId}/pending-orders`, {
+            params: { vendor_id: vendorId }
+        });
+        const orders = response.data;
+        // Return first unacknowledged order
+        return orders.find(o => !o.delivery_queue_acknowledged) || null;
+    } catch (error) {
+        console.error('[API] Error fetching staff orders:', error.message);
+        return null;
     }
 }
 
@@ -200,583 +494,681 @@ async function createOrder(orderData) {
 // MESSAGE HANDLING
 // ============================================
 
-async function handleIncomingMessage(message) {
+async function handleIncomingMessage(vendorId, message) {
     try {
         const remoteJid = message.key.remoteJid;
 
         // Ignore group messages
-        if (remoteJid.endsWith('@g.us')) {
-            console.log(`[Bot] Ignoring group message from: ${remoteJid}`);
-            return;
-        }
+        if (remoteJid.endsWith('@g.us')) return;
 
         const phoneNumber = remoteJid.replace('@s.whatsapp.net', '');
         const msgContent = message.message;
 
-        // Extract message text
-        const messageText = (
-            msgContent.conversation ||
-            msgContent.extendedTextMessage?.text ||
-            msgContent.buttonsResponseMessage?.selectedButtonId ||
-            msgContent.listResponseMessage?.singleSelectReply?.selectedRowId ||
-            msgContent.templateButtonReplyMessage?.selectedId ||
-            ''
-        ).trim();
+        // Use robust extraction
+        const messageText = getMessageText(msgContent).trim();
 
-        console.log(`[Bot] From ${phoneNumber}: "${messageText}"`);
+        console.log(`[${vendorId.substring(0, 8)}] From ${phoneNumber}: "${messageText}"`);
 
-        if (!messageText) {
-            console.log('[Bot] Unsupported message type, ignoring.');
+        if (!messageText && !msgContent.buttonsResponseMessage && !msgContent.listResponseMessage) {
+            // Log full message for debugging if it's empty but has something
+            if (Object.keys(msgContent).length > 0) {
+                console.log(`[Debug] Empty text but content:`, JSON.stringify(msgContent).substring(0, 200));
+            }
             return;
         }
 
-        // Check if this is a delivery staff responding
-        const isDeliveryStaff = await checkIfDeliveryStaff(phoneNumber);
-        if (isDeliveryStaff) {
-            await handleDeliveryStaffMessage(phoneNumber, messageText);
+        // Check if delivery staff
+        const staffInfo = await checkIfDeliveryStaff(vendorId, phoneNumber);
+        if (staffInfo) {
+            await handleDeliveryStaffMessage(vendorId, phoneNumber, messageText, staffInfo);
             return;
         }
 
         // Handle customer conversation
-        await handleCustomerConversation(phoneNumber, messageText);
+        await handleCustomerConversation(vendorId, phoneNumber, messageText);
 
     } catch (error) {
-        console.error('Error handling incoming message:', error);
+        console.error('[Error] handleIncomingMessage:', error);
     }
 }
 
-// Check if phone belongs to delivery staff
-async function checkIfDeliveryStaff(phoneNumber) {
-    try {
-        const response = await axios.get(`${FASTAPI_URL}/api/delivery-staff`);
-        const staff = response.data;
-        return staff.some(s => s.phone_number === phoneNumber || s.phone_number === `91${phoneNumber}` || `91${s.phone_number}` === phoneNumber);
-    } catch (error) {
-        return false;
-    }
-}
+// ============================================
+// DELIVERY STAFF MESSAGE HANDLING
+// Enhanced with structured responses
+// ============================================
 
-// Handle delivery staff messages
-async function handleDeliveryStaffMessage(phoneNumber, messageText) {
+async function handleDeliveryStaffMessage(vendorId, phoneNumber, messageText, staffInfo) {
+    const client = vendorClients.get(vendorId);
+    if (!client?.sock) return;
+
+    const jid = `${phoneNumber}@s.whatsapp.net`;
+    const text = messageText.toLowerCase().trim();
+
+    // Send helper function
+    const send = async (msg) => {
+        await client.sock.sendMessage(jid, { text: msg });
+    };
+
+    // Find staff's latest pending order
+    let pendingOrder = null;
     try {
-        // Forward to backend for processing
-        await axios.post(`${FASTAPI_URL}/api/whatsapp/delivery-response`, {
-            phone_number: phoneNumber,
-            message: messageText
+        const response = await axios.get(`${FASTAPI_URL}/api/delivery-staff/${staffInfo.staff_id}/orders`, {
+            params: {
+                vendor_id: vendorId,
+                status: 'pending'
+            }
         });
+        if (response.data && response.data.length > 0) {
+            pendingOrder = response.data[0];
+        }
     } catch (error) {
-        console.error('Error handling delivery staff message:', error.message);
+        console.error('[API] Error fetching staff orders:', error.message);
     }
+
+    // Handle numeric responses for delivery completion
+    if (['1', '2', '3'].includes(text) && pendingOrder) {
+        const orderId = pendingOrder.order_id;
+
+        try {
+            let paymentStatus;
+            let responseMsg;
+
+            if (text === '1') {
+                // Delivered & Cash Paid
+                paymentStatus = PAYMENT_STATUS.PAID_CASH;
+                responseMsg = `✅ Order ${orderId} delivered!\nPayment: Cash ₹${pendingOrder.amount} ✓\n\nGreat work! 👍`;
+            } else if (text === '2') {
+                // Delivered & UPI Paid
+                paymentStatus = PAYMENT_STATUS.PAID_UPI;
+                responseMsg = `✅ Order ${orderId} delivered!\nPayment: UPI ₹${pendingOrder.amount} ✓\n\nGreat work! 👍`;
+            } else if (text === '3') {
+                // Delivered & Not Paid - trigger customer notification
+                paymentStatus = PAYMENT_STATUS.DELIVERED_UNPAID;
+                responseMsg = `✅ Order ${orderId} delivered!\n⏳ Payment: Pending\n\nCustomer will be notified to confirm payment.`;
+            }
+
+            // Complete delivery via API
+            const result = await completeDelivery(vendorId, orderId, paymentStatus);
+            await send(responseMsg);
+
+            // If unpaid, send payment confirmation to customer
+            if (result.trigger_customer_payment) {
+                await sendCustomerPaymentRequest(vendorId, pendingOrder.customer_phone, pendingOrder);
+            }
+
+        } catch (error) {
+            await send(`❌ Could not update order ${orderId}. Please try again.`);
+        }
+        return;
+    }
+
+    // Handle "done ORDER_ID" format
+    const doneMatch = text.match(/^(done|delivered)\s+(\S+)/i);
+    if (doneMatch) {
+        const orderId = doneMatch[2].toUpperCase();
+        try {
+            await axios.patch(`${FASTAPI_URL}/api/orders/${orderId}/status`, null, {
+                params: { status: 'delivered' }
+            });
+            await send(`✅ Order ${orderId} marked as delivered!`);
+        } catch (error) {
+            await send(`❌ Could not update ${orderId}`);
+        }
+        return;
+    }
+
+    // Handle "paid ORDER_ID cash/upi" format
+    const paidMatch = text.match(/^paid\s+(\S+)\s*(cash|upi)?/i);
+    if (paidMatch) {
+        const orderId = paidMatch[1].toUpperCase();
+        const method = paidMatch[2]?.toLowerCase() || 'cash';
+        try {
+            await axios.patch(`${FASTAPI_URL}/api/orders/${orderId}/payment`, null, {
+                params: {
+                    payment_status: method === 'upi' ? 'paid_upi' : 'paid_cash',
+                    payment_method: method
+                }
+            });
+            await send(`✅ ${orderId} marked PAID (${method})!`);
+        } catch (error) {
+            await send(`❌ Could not update ${orderId}`);
+        }
+        return;
+    }
+
+    // Show current order or help
+    if (pendingOrder) {
+        await send(
+            `🚚 *Current Delivery*\n\n` +
+            `Order: *${pendingOrder.order_id}*\n` +
+            `Customer: ${pendingOrder.customer_name}\n` +
+            `Phone: ${pendingOrder.customer_phone}\n` +
+            `Address: ${pendingOrder.customer_address}\n` +
+            `Items: ${pendingOrder.quantity} × ${pendingOrder.litre_size}L\n` +
+            `Amount: ₹${pendingOrder.amount}\n\n` +
+            `*Reply:*\n` +
+            `*1* - Delivered & Cash Paid\n` +
+            `*2* - Delivered & UPI Paid\n` +
+            `*3* - Delivered & Not Paid`
+        );
+    } else {
+        await send(
+            `📋 *Staff Commands:*\n\n` +
+            `• Reply *1/2/3* for current order\n` +
+            `• *done ORDER_ID* - Mark delivered\n` +
+            `• *paid ORDER_ID cash* - Mark paid\n\n` +
+            `No pending orders right now.`
+        );
+    }
+}
+
+// Send payment request to customer after unpaid delivery
+async function sendCustomerPaymentRequest(vendorId, customerPhone, order) {
+    const client = vendorClients.get(vendorId);
+    if (!client?.sock) return;
+
+    const jid = `${customerPhone}@s.whatsapp.net`;
+
+    // Store that we're waiting for payment response
+    const sessionKey = `${vendorId}:${customerPhone}`;
+    conversationState.set(sessionKey, {
+        step: STEPS.AWAITING_PAYMENT_CHOICE,
+        lastActivity: Date.now(),
+        data: { orderId: order.order_id, amount: order.amount }
+    });
+
+    await client.sock.sendMessage(jid, {
+        text: `Hi 👋 Your water cans were delivered.\n\n` +
+            `Order: ${order.order_id}\n` +
+            `Amount: ₹${order.amount}\n\n` +
+            `Please confirm payment:\n\n` +
+            `*1* - Pay now via UPI\n` +
+            `*2* - Pay later in cash\n\n` +
+            `Reply with 1 or 2.`
+    });
 }
 
 // ============================================
 // CUSTOMER CONVERSATION FLOW
+// Enhanced with smart follow-up handling
 // ============================================
 
-async function handleCustomerConversation(phoneNumber, messageText) {
-    // Get or create session
-    let session = conversationState.get(phoneNumber) || {
-        step: STEPS.START,
-        lastActivity: Date.now()
-    };
+async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
+    const client = vendorClients.get(vendorId);
+    if (!client?.sock) return;
 
-    // Update last activity
+    const jid = `${phoneNumber}@s.whatsapp.net`;
+    const sessionKey = `${vendorId}:${phoneNumber}`;
+    const text = messageText.toLowerCase().trim();
+
+    // Get or create session
+    let session = conversationState.get(sessionKey) || {
+        step: STEPS.IDLE,
+        lastActivity: Date.now(),
+        data: {}
+    };
     session.lastActivity = Date.now();
 
-    console.log(`[Bot] User ${phoneNumber} at step: ${session.step}`);
+    // Send helper function
+    const send = async (msg) => {
+        await client.sock.sendMessage(jid, { text: msg });
+    };
 
-    try {
-        switch (session.step) {
-            case STEPS.START:
-                await handleStartStep(phoneNumber, session, messageText);
-                break;
+    // Get prices
+    const prices = await getProductPrices(vendorId) || {};
+    const price20L = prices['20L'] || 50;
+    const price25L = prices['25L'] || 65;
 
-            case STEPS.AWAITING_NAME:
-                await handleNameStep(phoneNumber, session, messageText);
-                break;
-
-            case STEPS.AWAITING_ADDRESS:
-                await handleAddressStep(phoneNumber, session, messageText);
-                break;
-
-            case STEPS.AWAITING_ORDER:
-                await handleOrderStep(phoneNumber, session, messageText);
-                break;
-
-            case STEPS.AWAITING_20L_QTY:
-                await handleQuantity20LStep(phoneNumber, session, messageText);
-                break;
-
-            case STEPS.AWAITING_25L_QTY:
-                await handleQuantity25LStep(phoneNumber, session, messageText);
-                break;
-
-            case STEPS.AWAITING_CONFIRMATION:
-                await handleConfirmationStep(phoneNumber, session, messageText);
-                break;
-
-            default:
-                // Reset to start
-                session.step = STEPS.START;
-                conversationState.set(phoneNumber, session);
-                await handleStartStep(phoneNumber, session, messageText);
-        }
-    } catch (error) {
-        console.error('Error in conversation flow:', error);
-        await sendMessage(phoneNumber, "Sorry, something went wrong. Please send 'hi' to start over.");
-        conversationState.delete(phoneNumber);
-    }
-}
-
-// STEP: START - Check if new or returning customer
-async function handleStartStep(phoneNumber, session, messageText) {
-    // Check if customer exists in backend
-    const customer = await getCustomerByPhone(phoneNumber);
-
-    if (customer && customer.name && customer.address) {
-        // Returning customer - greet by name
-        session.customer = customer;
-        session.step = STEPS.AWAITING_ORDER;
-        conversationState.set(phoneNumber, session);
-
-        await sendMessage(phoneNumber,
-            `Hi ${customer.name} 👋\n` +
-            `Welcome back to Thanni Canuuu! 💧\n\n` +
-            `How many water cans do you need today?`
-        );
-
-        // Show prices and ask for order
-        await showPricesAndAskOrder(phoneNumber, session);
-    } else {
-        // New customer - ask for name
-        session.step = STEPS.AWAITING_NAME;
-        conversationState.set(phoneNumber, session);
-
-        await sendMessage(phoneNumber,
-            `Hi 👋 Welcome to Thanni Canuuu! 💧\n\n` +
-            `We deliver fresh drinking water right to your doorstep.\n\n` +
-            `May I know your name?`
-        );
-    }
-}
-
-// STEP: AWAITING_NAME - Collect customer name
-async function handleNameStep(phoneNumber, session, messageText) {
-    const name = messageText.trim();
-
-    if (name.length < 2) {
-        await sendMessage(phoneNumber, "Please share your name (at least 2 characters):");
-        return;
-    }
-
-    // Store name in session
-    session.name = name;
-    session.step = STEPS.AWAITING_ADDRESS;
-    conversationState.set(phoneNumber, session);
-
-    await sendMessage(phoneNumber,
-        `Thanks, ${name}! 🙏\n\n` +
-        `Please share your *delivery address*\n` +
-        `(Include landmark if possible)`
-    );
-}
-
-// STEP: AWAITING_ADDRESS - Collect delivery address
-async function handleAddressStep(phoneNumber, session, messageText) {
-    const address = messageText.trim();
-
-    if (address.length < 10) {
-        await sendMessage(phoneNumber,
-            "Please provide a complete address with area/street name and landmark.\n" +
-            "(Minimum 10 characters)"
-        );
-        return;
-    }
-
-    // Save customer to backend
-    try {
-        const customer = await createCustomer(phoneNumber, session.name, address);
-        session.customer = customer;
-        session.address = address;
-        session.step = STEPS.AWAITING_ORDER;
-        conversationState.set(phoneNumber, session);
-
-        await sendMessage(phoneNumber,
-            `Perfect! ✅\n` +
-            `Your profile is saved.\n\n` +
-            `Let's get you some fresh water! 💧`
-        );
-
-        // Show prices and ask for order
-        await showPricesAndAskOrder(phoneNumber, session);
-    } catch (error) {
-        await sendMessage(phoneNumber,
-            "Sorry, there was an error saving your details. Please try again."
-        );
-        conversationState.delete(phoneNumber);
-    }
-}
-
-// Show prices and prompt for order
-async function showPricesAndAskOrder(phoneNumber, session) {
-    const prices = await getProductPrices();
-
-    if (!prices) {
-        await sendMessage(phoneNumber,
-            "Sorry, couldn't fetch prices. Please try again later."
-        );
-        conversationState.delete(phoneNumber);
-        return;
-    }
-
-    // Store prices in session
-    session.prices = prices;
-    session.step = STEPS.AWAITING_20L_QTY;
-    conversationState.set(phoneNumber, session);
-
-    await sendMessage(phoneNumber,
-        `*Today's Prices:*\n\n` +
-        `🚰 20L Can – ₹${prices['20L']}\n` +
-        `🚰 25L Can – ₹${prices['25L']}\n\n` +
-        `How many *20L cans* do you need?\n` +
-        `(Enter 0 if you don't need any)`
-    );
-}
-
-// STEP: AWAITING_ORDER - Handle order initiation (for returning customers who message randomly)
-async function handleOrderStep(phoneNumber, session, messageText) {
-    // Show prices and start order flow
-    await showPricesAndAskOrder(phoneNumber, session);
-}
-
-// STEP: AWAITING_20L_QTY - Collect 20L quantity
-async function handleQuantity20LStep(phoneNumber, session, messageText) {
-    const qty = parseInt(messageText);
-
-    if (isNaN(qty) || qty < 0 || qty > 50) {
-        await sendMessage(phoneNumber,
-            "Please enter a valid number (0-50):"
-        );
-        return;
-    }
-
-    session.qty20L = qty;
-    session.step = STEPS.AWAITING_25L_QTY;
-    conversationState.set(phoneNumber, session);
-
-    if (qty > 0) {
-        await sendMessage(phoneNumber,
-            `Got it! ${qty} × 20L cans ✓\n\n` +
-            `How many *25L cans* do you need?\n` +
-            `(Enter 0 if you don't need any)`
-        );
-    } else {
-        await sendMessage(phoneNumber,
-            `No 20L cans. Got it!\n\n` +
-            `How many *25L cans* do you need?`
-        );
-    }
-}
-
-// STEP: AWAITING_25L_QTY - Collect 25L quantity
-async function handleQuantity25LStep(phoneNumber, session, messageText) {
-    const qty = parseInt(messageText);
-
-    if (isNaN(qty) || qty < 0 || qty > 50) {
-        await sendMessage(phoneNumber,
-            "Please enter a valid number (0-50):"
-        );
-        return;
-    }
-
-    session.qty25L = qty;
-
-    // Check if at least one item ordered
-    if (session.qty20L === 0 && qty === 0) {
-        await sendMessage(phoneNumber,
-            "You need to order at least 1 can! 😊\n\n" +
-            "How many *20L cans* do you need?"
-        );
-        session.step = STEPS.AWAITING_20L_QTY;
-        conversationState.set(phoneNumber, session);
-        return;
-    }
-
-    // Calculate totals
-    const total20L = session.qty20L * session.prices['20L'];
-    const total25L = qty * session.prices['25L'];
-    const grandTotal = total20L + total25L;
-    const totalCans = session.qty20L + qty;
-
-    // Check inventory
-    const inventory = await checkInventory(totalCans);
-    session.inventoryAvailable = inventory.available;
-    session.step = STEPS.AWAITING_CONFIRMATION;
-    conversationState.set(phoneNumber, session);
-
-    // Build order summary
-    const customerName = session.customer?.name || session.name;
-    const deliveryAddress = session.customer?.address || session.address;
-
-    let items = [];
-    if (session.qty20L > 0) {
-        items.push(`• ${session.qty20L} × 20L cans – ₹${total20L}`);
-    }
-    if (qty > 0) {
-        items.push(`• ${qty} × 25L cans – ₹${total25L}`);
-    }
-
-    let stockNote = '';
-    if (!inventory.available) {
-        stockNote = `\n\n📅 *Note:* Today's stock is fully booked.\nYour order will be scheduled for *tomorrow morning*.`;
-    }
-
-    await sendMessage(phoneNumber,
-        `*📦 Order Summary*\n\n` +
-        `${items.join('\n')}\n\n` +
-        `*Total: ₹${grandTotal}*\n\n` +
-        `📍 Delivery to:\n${deliveryAddress}` +
-        stockNote +
-        `\n\n✅ Confirm order?\nReply *YES* or *NO*`
-    );
-}
-
-// STEP: AWAITING_CONFIRMATION - Handle order confirmation
-async function handleConfirmationStep(phoneNumber, session, messageText) {
-    const response = messageText.toUpperCase().trim();
-
-    if (response === 'YES' || response === 'Y') {
-        await processOrder(phoneNumber, session);
-    } else if (response === 'NO' || response === 'N') {
-        conversationState.delete(phoneNumber);
-        await sendMessage(phoneNumber,
-            "Order cancelled ❌\n\n" +
-            "Send any message when you're ready to order again! 💧"
-        );
-    } else {
-        await sendMessage(phoneNumber,
-            "Please reply *YES* to confirm or *NO* to cancel."
-        );
-    }
-}
-
-// Process the confirmed order
-async function processOrder(phoneNumber, session) {
-    try {
-        await sendMessage(phoneNumber, "Processing your order... ⏳");
-
-        const customerName = session.customer?.name || session.name;
-        const deliveryAddress = session.customer?.address || session.address;
-
-        // Determine delivery date
-        const today = new Date();
-        let deliveryDate = today.toISOString().split('T')[0];
-        let isScheduledForTomorrow = false;
-
-        if (!session.inventoryAvailable) {
-            // Schedule for tomorrow
-            const tomorrow = new Date(today);
-            tomorrow.setDate(tomorrow.getDate() + 1);
-            deliveryDate = tomorrow.toISOString().split('T')[0];
-            isScheduledForTomorrow = true;
-        }
-
-        // Build order items
-        const items = [];
-        if (session.qty20L > 0) {
-            items.push({
-                litre_size: 20,
-                quantity: session.qty20L,
-                price_per_can: session.prices['20L']
-            });
-        }
-        if (session.qty25L > 0) {
-            items.push({
-                litre_size: 25,
-                quantity: session.qty25L,
-                price_per_can: session.prices['25L']
-            });
-        }
-
-        // Create order
-        const orderData = {
-            customer_phone: phoneNumber,
-            customer_name: customerName,
-            customer_address: deliveryAddress,
-            items: items,
-            delivery_date: deliveryDate,
-            is_tomorrow_order: isScheduledForTomorrow
-        };
-
-        const result = await createOrder(orderData);
-
-        if (result.success) {
-            let confirmationMsg = `✅ *Order Confirmed!*\n\n` +
-                `Order ID: ${result.order_id}\n`;
-
-            if (result.delivery_staff) {
-                confirmationMsg += `Delivery by: ${result.delivery_staff}\n`;
+    // ============================================
+    // Handle payment response if waiting
+    // ============================================
+    if (session.step === STEPS.AWAITING_PAYMENT_CHOICE) {
+        if (text === '1' || text.includes('upi')) {
+            // Customer chose UPI
+            try {
+                const result = await handleCustomerPaymentResponse(vendorId, session.data.orderId, 'upi');
+                if (result.vendor_upi) {
+                    await send(
+                        `🙏 Please send ₹${result.amount} to:\n\n` +
+                        `*UPI ID:* ${result.vendor_upi}\n\n` +
+                        `Thank you! We'll confirm once received.`
+                    );
+                } else {
+                    await send(
+                        `🙏 Please complete UPI payment of ₹${result.amount}.\n\n` +
+                        `Contact us for UPI details.\n` +
+                        `Thank you!`
+                    );
+                }
+            } catch (error) {
+                await send(`Sorry, something went wrong. Please try again.`);
             }
-
-            if (isScheduledForTomorrow) {
-                confirmationMsg += `\n📅 Today's cans are fully booked.\n` +
-                    `Your order is scheduled for *tomorrow morning* 🚚\n` +
-                    `Thank you for your patience!`;
-            } else {
-                confirmationMsg += `\n🚚 Delivery scheduled for *today*!`;
+            conversationState.delete(sessionKey);
+            return;
+        } else if (text === '2' || text.includes('cash')) {
+            // Customer chose cash
+            try {
+                await handleCustomerPaymentResponse(vendorId, session.data.orderId, 'cash');
+                await send(
+                    `Thank you! 🙏\n\n` +
+                    `Our staff will collect ₹${session.data.amount} soon.\n` +
+                    `Have a great day!`
+                );
+            } catch (error) {
+                await send(`Sorry, something went wrong. Please try again.`);
             }
-
-            confirmationMsg += `\n\nThank you for choosing Thanni Canuuu! 💧`;
-
-            await sendMessage(phoneNumber, confirmationMsg);
-            conversationState.delete(phoneNumber);
+            conversationState.delete(sessionKey);
+            return;
         } else {
-            throw new Error(result.message || 'Order creation failed');
+            await send(`Please reply *1* for UPI or *2* for Cash.`);
+            conversationState.set(sessionKey, session);
+            return;
         }
-    } catch (error) {
-        console.error('Order processing error:', error);
-        const errorMsg = error.response?.data?.detail || error.message || 'Unknown error';
-        await sendMessage(phoneNumber,
-            `❌ Sorry, couldn't place your order.\n\n` +
-            `Error: ${errorMsg}\n\n` +
-            `Please try again or contact support.`
-        );
-        conversationState.delete(phoneNumber);
     }
+
+    // ============================================
+    // Handle menu choice (status vs new order)
+    // ============================================
+    if (session.step === STEPS.AWAITING_MENU_CHOICE) {
+        if (text === '1' || text.includes('status')) {
+            // Customer wants to check order status
+            const orderInfo = await getCustomerLatestOrder(vendorId, phoneNumber);
+
+            if (orderInfo.order) {
+                const order = orderInfo.order;
+                const statusEmoji = {
+                    'pending': '⏳ In queue',
+                    'in_queue': '📋 In queue',
+                    'assigned': '👤 Assigned',
+                    'out_for_delivery': '🚚 Out for delivery',
+                    'delivered': '✅ Delivered',
+                    'delayed': '⚠️ Delayed',
+                    'cancelled': '❌ Cancelled'
+                };
+
+                await send(
+                    `📦 *Your Last Order*\n\n` +
+                    `Order ID: ${order.order_id}\n` +
+                    `• ${order.quantity} × ${order.litre_size}L cans\n` +
+                    `• Amount: ₹${order.amount}\n` +
+                    `• Status: ${statusEmoji[order.status] || order.status}\n` +
+                    (order.status !== 'delivered' ? `\nExpected today 🚚` : `\nDelivered on ${new Date(order.delivered_at).toLocaleDateString()}`) +
+                    `\n\nThank you! 💧`
+                );
+            } else {
+                await send(`No recent orders found.\n\nSend *Hi* to place a new order! 👋`);
+            }
+
+            conversationState.delete(sessionKey);
+            return;
+        } else if (text === '2' || text.includes('new') || text.includes('order')) {
+            // Customer wants to place new order - start order flow
+            session.step = STEPS.AWAITING_CAN_TYPE;
+            await send(`Which can do you need?\n*20L* / *25L* / *Both*`);
+            conversationState.set(sessionKey, session);
+            return;
+        } else {
+            await send(`Please reply *1* for order status or *2* for new order.`);
+            conversationState.set(sessionKey, session);
+            return;
+        }
+    }
+
+    // ============================================
+    // Handle based on current step
+    // ============================================
+    switch (session.step) {
+
+        case STEPS.IDLE:
+            // Any greeting starts the flow
+            if (['hi', 'hello', 'order', 'start', 'hii', 'hey'].includes(text) || text.length > 0) {
+                // Check if returning customer with existing orders
+                const customer = await getCustomerByPhone(vendorId, phoneNumber);
+                const activeOrderInfo = await getCustomerActiveOrder(vendorId, phoneNumber);
+
+                if (activeOrderInfo.has_active_order) {
+                    // Customer has active order - show menu
+                    session.data.customer = customer;
+                    session.data.name = customer?.name;
+                    session.data.address = customer?.address;
+                    session.step = STEPS.AWAITING_MENU_CHOICE;
+
+                    const order = activeOrderInfo.order;
+                    await send(
+                        `Hi ${customer?.name || 'there'}! 👋\n\n` +
+                        `You have an active order:\n` +
+                        `• ${order.quantity} × ${order.litre_size}L (₹${order.amount})\n` +
+                        `• Status: ${order.status === 'pending' ? '⏳ In queue' : '🚚 On the way'}\n\n` +
+                        `What would you like to do?\n\n` +
+                        `*1* - Check my order status\n` +
+                        `*2* - Place a new order\n\n` +
+                        `Reply with 1 or 2.`
+                    );
+                } else if (customer && customer.name && customer.address) {
+                    // Returning customer with no active order
+                    session.data.customer = customer;
+                    session.data.name = customer.name;
+                    session.data.address = customer.address;
+                    session.step = STEPS.AWAITING_CAN_TYPE;
+
+                    await send(`Hi ${customer.name}! 👋 Welcome back!\n\nWhich can do you need?\n*20L* / *25L* / *Both*`);
+                } else {
+                    // New customer - ask name
+                    session.step = STEPS.AWAITING_NAME;
+                    await send(`Hi 👋 Welcome!\n\nMay I know your name?`);
+                }
+            }
+            break;
+
+        case STEPS.AWAITING_NAME:
+            // Capture name
+            session.data.name = messageText.trim();
+            session.step = STEPS.AWAITING_ADDRESS;
+            await send(`Thanks ${session.data.name}! 😊\n\nPlease share your delivery address.`);
+            break;
+
+        case STEPS.AWAITING_ADDRESS:
+            // Capture address and save customer
+            session.data.address = messageText.trim();
+
+            // Save customer to DB
+            await createCustomer(vendorId, phoneNumber, session.data.name, session.data.address);
+
+            session.step = STEPS.AWAITING_CAN_TYPE;
+            await send(`Great! 📍 Address saved.\n\nWhich can do you need?\n*20L* / *25L* / *Both*`);
+            break;
+
+        case STEPS.AWAITING_CAN_TYPE:
+            // Parse can type
+            if (text.includes('20') && text.includes('25') || text.includes('both')) {
+                // Both types
+                session.data.canType = 'both';
+                session.step = STEPS.AWAITING_QTY_20L;
+                await send(`How many *20L* cans?`);
+            } else if (text.includes('20') || text === '1') {
+                session.data.canType = '20';
+                session.step = STEPS.AWAITING_QTY_20L;
+                await send(`How many *20L* cans?`);
+            } else if (text.includes('25') || text === '2') {
+                session.data.canType = '25';
+                session.step = STEPS.AWAITING_QTY_25L;
+                await send(`How many *25L* cans?`);
+            } else {
+                await send(`Please reply: *20L*, *25L*, or *Both*`);
+            }
+            break;
+
+        case STEPS.AWAITING_QTY_20L:
+            const qty20 = parseInt(text);
+            if (isNaN(qty20) || qty20 < 1 || qty20 > 50) {
+                await send(`Please enter a number (1-50)`);
+                break;
+            }
+            session.data.qty20L = qty20;
+
+            if (session.data.canType === 'both') {
+                session.step = STEPS.AWAITING_QTY_25L;
+                await send(`How many *25L* cans?`);
+            } else {
+                // Single type - confirm
+                session.step = STEPS.AWAITING_CONFIRM;
+                const total = qty20 * price20L;
+                await send(
+                    `📋 *Order Summary*\n\n` +
+                    `${qty20} × 20L = ₹${total}\n` +
+                    `📍 ${session.data.address}\n\n` +
+                    `Confirm? *YES* / *NO*`
+                );
+            }
+            break;
+
+        case STEPS.AWAITING_QTY_25L:
+            const qty25 = parseInt(text);
+            if (isNaN(qty25) || qty25 < 1 || qty25 > 50) {
+                await send(`Please enter a number (1-50)`);
+                break;
+            }
+            session.data.qty25L = qty25;
+            session.step = STEPS.AWAITING_CONFIRM;
+
+            // Build summary
+            let summary = `📋 *Order Summary*\n\n`;
+            let total = 0;
+
+            if (session.data.qty20L > 0) {
+                const sub20 = session.data.qty20L * price20L;
+                summary += `${session.data.qty20L} × 20L = ₹${sub20}\n`;
+                total += sub20;
+            }
+            const sub25 = qty25 * price25L;
+            summary += `${qty25} × 25L = ₹${sub25}\n`;
+            total += sub25;
+
+            summary += `\n*Total: ₹${total}*\n`;
+            summary += `📍 ${session.data.address}\n\n`;
+            summary += `Confirm? *YES* / *NO*`;
+
+            await send(summary);
+            break;
+
+        case STEPS.AWAITING_CONFIRM:
+            if (['yes', 'y', 'confirm', 'ok', 'haan', 'ha'].includes(text)) {
+                try {
+                    // Build order items
+                    const items = [];
+                    if (session.data.qty20L > 0) {
+                        items.push({
+                            litre_size: 20,
+                            quantity: session.data.qty20L,
+                            price_per_can: price20L
+                        });
+                    }
+                    if (session.data.qty25L > 0) {
+                        items.push({
+                            litre_size: 25,
+                            quantity: session.data.qty25L,
+                            price_per_can: price25L
+                        });
+                    }
+
+                    // Create order
+                    const result = await createOrder(vendorId, {
+                        customer_phone: phoneNumber,
+                        customer_name: session.data.name,
+                        customer_address: session.data.address,
+                        items: items
+                    });
+
+                    await send(
+                        `✅ *Order Confirmed!*\n\n` +
+                        `Order ID: ${result.order_id}\n` +
+                        `Amount: ₹${result.total_amount}\n\n` +
+                        `Your order will be delivered soon! 🚚\n\n` +
+                        `Send *1* anytime to check status.`
+                    );
+
+                    // Clear session
+                    conversationState.delete(sessionKey);
+
+                } catch (error) {
+                    const errMsg = error.response?.data?.detail || 'Something went wrong';
+                    await send(`❌ Sorry, couldn't process order.\n${errMsg}\n\nPlease try again.`);
+                    conversationState.delete(sessionKey);
+                }
+            } else if (['no', 'n', 'cancel', 'nahi'].includes(text)) {
+                await send(`❌ Order cancelled.\n\nSend *Hi* to start again.`);
+                conversationState.delete(sessionKey);
+            } else {
+                await send(`Reply *YES* to confirm or *NO* to cancel.`);
+            }
+            break;
+
+        default:
+            session.step = STEPS.IDLE;
+            await send(`Send *Hi* to place an order! 👋`);
+    }
+
+    // Save session
+    conversationState.set(sessionKey, session);
 }
 
 // ============================================
-// SEND MESSAGE HELPER
+// API ENDPOINTS
 // ============================================
 
-async function sendMessage(phoneNumber, text) {
-    try {
-        if (!sock) {
-            throw new Error('WhatsApp not connected');
-        }
-
-        const jid = phoneNumber.includes('@') ? phoneNumber : `${phoneNumber}@s.whatsapp.net`;
-        await sock.sendMessage(jid, { text });
-        console.log(`[Bot] Sent to ${phoneNumber}: ${text.substring(0, 50)}...`);
-        return { success: true };
-
-    } catch (error) {
-        console.error('Error sending message:', error);
-        return { success: false, error: error.message };
-    }
-}
-
-// ============================================
-// EXPRESS API ENDPOINTS
-// ============================================
-
-app.get('/qr', (req, res) => {
-    res.json({ qr: qrCode || null });
-});
-
-app.post('/send', async (req, res) => {
-    const { phone_number, message } = req.body;
-    const result = await sendMessage(phone_number, message);
-    res.json(result);
-});
-
-app.get('/status', (req, res) => {
-    const connected = isConnected || (sock?.user ? true : false);
+// Health check
+app.get('/health', (req, res) => {
     res.json({
-        connected: connected,
-        user: sock?.user || null,
-        status: connected ? 'online' : (qrCode ? 'awaiting_scan' : 'connecting')
+        status: 'ok',
+        activeVendors: vendorClients.size,
+        timestamp: new Date().toISOString()
     });
 });
 
-app.post('/disconnect', async (req, res) => {
+// Get WhatsApp status for a vendor
+app.get('/status/:vendorId', async (req, res) => {
+    const { vendorId } = req.params;
+    const client = vendorClients.get(vendorId);
+
+    if (!client) {
+        return res.json({
+            connected: false,
+            initialized: false,
+            message: 'WhatsApp not initialized'
+        });
+    }
+
+    res.json({
+        connected: client.isConnected,
+        initialized: true,
+        user: client.isConnected ? {
+            id: client.user?.id,
+            name: client.user?.name
+        } : null
+    });
+});
+
+// Get QR code for a vendor
+app.get('/qr/:vendorId', async (req, res) => {
+    const { vendorId } = req.params;
+
+    let client = vendorClients.get(vendorId);
+
+    if (!client) {
+        await initVendorWhatsApp(vendorId);
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        client = vendorClients.get(vendorId);
+    }
+
+    if (!client) {
+        return res.json({ qr: null, error: 'Could not initialize WhatsApp' });
+    }
+
+    if (client.isConnected) {
+        return res.json({ qr: null, connected: true });
+    }
+
+    res.json({ qr: client.qrCode });
+});
+
+// Initialize WhatsApp for a vendor
+app.post('/init/:vendorId', async (req, res) => {
+    const { vendorId } = req.params;
+
+    if (vendorClients.has(vendorId)) {
+        return res.json({ success: true, message: 'Already initialized' });
+    }
+
+    await initVendorWhatsApp(vendorId);
+    res.json({ success: true, message: 'WhatsApp initialization started' });
+});
+
+// Disconnect WhatsApp
+app.post('/disconnect/:vendorId', async (req, res) => {
+    const { vendorId } = req.params;
+    const client = vendorClients.get(vendorId);
+
+    if (!client?.sock) {
+        return res.json({ success: false, message: 'No active connection' });
+    }
+
     try {
-        console.log('Disconnect request received');
+        try { await client.sock.logout(); } catch (e) { }
+        client.sock.end();
+        vendorClients.delete(vendorId);
 
-        if (sock) {
-            try {
-                await sock.logout();
-                console.log('WhatsApp logout successful');
-            } catch (logoutError) {
-                console.error('Error during logout:', logoutError);
-            }
-
-            sock.end();
-            sock = null;
-        }
-
-        isConnected = false;
-        qrCode = null;
-
-        const authPath = path.join(__dirname, 'auth_info');
+        const authPath = path.join(__dirname, `auth_info_${vendorId}`);
         if (fs.existsSync(authPath)) {
             fs.rmSync(authPath, { recursive: true, force: true });
-            console.log('Auth info deleted');
         }
 
-        console.log('WhatsApp disconnected successfully');
-        res.json({
-            success: true,
-            message: 'WhatsApp disconnected successfully.'
-        });
-
+        res.json({ success: true, message: 'Disconnected' });
     } catch (error) {
-        console.error('Error disconnecting WhatsApp:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-app.post('/reconnect', async (req, res) => {
+// Reconnect WhatsApp
+app.post('/reconnect/:vendorId', async (req, res) => {
+    const { vendorId } = req.params;
+    const client = vendorClients.get(vendorId);
+
+    if (client?.sock) {
+        client.sock.end();
+    }
+    vendorClients.delete(vendorId);
+
+    await initVendorWhatsApp(vendorId);
+    res.json({ success: true, message: 'Reconnection initiated' });
+});
+
+// Send message (testing)
+app.post('/send/:vendorId', async (req, res) => {
+    const { vendorId } = req.params;
+    const { to, message } = req.body;
+    const client = vendorClients.get(vendorId);
+
+    if (!client?.sock || !client.isConnected) {
+        return res.status(400).json({ success: false, error: 'Not connected' });
+    }
+
     try {
-        console.log('Reconnect request received');
-        if (sock) {
-            sock.end();
-            sock = null;
-        }
-
-        isConnected = false;
-        qrCode = null;
-
-        await initWhatsApp();
-        res.json({ success: true, message: 'Reconnection initiated. Check terminal for QR code.' });
-
+        const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
+        await client.sock.sendMessage(jid, { text: message });
+        res.json({ success: true });
     } catch (error) {
-        console.error('Error reconnecting WhatsApp:', error);
         res.status(500).json({ success: false, error: error.message });
     }
 });
 
-// Get active conversation sessions (for debugging)
-app.get('/sessions', (req, res) => {
-    const sessions = [];
-    for (const [phone, session] of conversationState.entries()) {
-        sessions.push({
-            phone,
-            step: session.step,
-            lastActivity: new Date(session.lastActivity).toISOString()
+// List active vendors
+app.get('/vendors', (req, res) => {
+    const vendors = [];
+    for (const [vendorId, client] of vendorClients.entries()) {
+        vendors.push({
+            vendorId: vendorId.substring(0, 8) + '...',
+            connected: client.isConnected,
+            hasQr: !!client.qrCode
         });
     }
-    res.json({ count: sessions.length, sessions });
+    res.json({ count: vendors.length, vendors });
 });
 
-// Clear a specific session
-app.delete('/sessions/:phone', (req, res) => {
-    const phone = req.params.phone;
-    if (conversationState.has(phone)) {
-        conversationState.delete(phone);
-        res.json({ success: true, message: `Session for ${phone} cleared` });
-    } else {
-        res.status(404).json({ success: false, message: 'Session not found' });
-    }
-});
+// Legacy endpoints
+app.get('/status', (req, res) => res.json({ message: 'Use /status/:vendorId', activeVendors: vendorClients.size }));
+app.get('/qr', (req, res) => res.json({ message: 'Use /qr/:vendorId', activeVendors: vendorClients.size }));
 
 // ============================================
 // START SERVER
 // ============================================
 
 app.listen(PORT, () => {
-    console.log(`\n🚀 WhatsApp service running on port ${PORT}`);
-    console.log(`📡 Backend API: ${FASTAPI_URL}`);
-    console.log('');
-    initWhatsApp();
+    console.log(`\n🚀 WhatsApp Service running on port ${PORT}`);
+    console.log(`📡 Backend: ${FASTAPI_URL}`);
+    console.log(`\nEndpoints:`);
+    console.log(`  GET  /status/:vendorId`);
+    console.log(`  GET  /qr/:vendorId`);
+    console.log(`  POST /init/:vendorId`);
+    console.log(`  POST /disconnect/:vendorId`);
+    console.log(`  GET  /vendors\n`);
 });

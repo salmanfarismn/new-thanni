@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { api } from '../context/AppContext';
 import { Link } from 'react-router-dom';
-import { Settings as SettingsIcon, Save, Droplet, Droplets, IndianRupee, Clock, ArrowRight, MessageSquare, Users, Building2, RotateCcw, Wallet, Zap, CheckCircle2, Plus, Minus, Layout, Store, Type } from 'lucide-react';
+import { Settings as SettingsIcon, Save, Droplet, Droplets, IndianRupee, Clock, ArrowRight, MessageSquare, Users, Building2, RotateCcw, Wallet, Zap, CheckCircle2, Plus, Minus, Layout, Store, Type, Shield, Smartphone, Lock, AlertTriangle } from 'lucide-react';
 import { toast } from 'sonner';
 import { useCompanyName } from '../context/AppContext';
 
@@ -140,6 +140,9 @@ export default function Settings() {
             </TabsTrigger>
             <TabsTrigger value="workflows" className="flex-shrink-0 gap-2 px-5 py-2.5 h-auto text-sm font-bold bg-white border border-slate-200 lg:border-transparent lg:bg-transparent data-[state=active]:bg-slate-900 data-[state=active]:text-white lg:data-[state=active]:bg-sky-50 lg:data-[state=active]:text-sky-700 data-[state=active]:border-slate-900 data-[state=active]:shadow-lg lg:data-[state=active]:shadow-none rounded-full lg:rounded-xl lg:justify-start lg:px-4 lg:py-3 lg:text-base transition-all">
               <Zap size={16} className="lg:w-[18px] lg:h-[18px]" /> Workflows
+            </TabsTrigger>
+            <TabsTrigger value="security" className="flex-shrink-0 gap-2 px-5 py-2.5 h-auto text-sm font-bold bg-white border border-slate-200 lg:border-transparent lg:bg-transparent data-[state=active]:bg-slate-900 data-[state=active]:text-white lg:data-[state=active]:bg-sky-50 lg:data-[state=active]:text-sky-700 data-[state=active]:border-slate-900 data-[state=active]:shadow-lg lg:data-[state=active]:shadow-none rounded-full lg:rounded-xl lg:justify-start lg:px-4 lg:py-3 lg:text-base transition-all">
+              <Shield size={16} className="lg:w-[18px] lg:h-[18px]" /> Security
             </TabsTrigger>
           </TabsList>
         </aside>
@@ -362,6 +365,129 @@ export default function Settings() {
                   </div>
                 </div>
               </Link>
+            </div>
+          </TabsContent>
+
+          {/* Security Settings */}
+          <TabsContent value="security" className="mt-0 space-y-6">
+            <div className="bg-amber-50/50 border border-amber-100 rounded-2xl p-4 flex gap-3 text-amber-800 max-w-4xl mx-auto mb-6">
+              <div className="p-2 bg-amber-100/50 rounded-lg h-fit">
+                <Shield size={18} />
+              </div>
+              <div className="text-sm leading-relaxed font-medium">
+                Manage your account security, active sessions, and login devices.
+              </div>
+            </div>
+
+            <div className="max-w-4xl mx-auto space-y-6">
+
+              {/* Account Status and Quick Actions */}
+              <div className="flex flex-col md:flex-row gap-6">
+                {/* Identity Card */}
+                <div className="flex-1 bg-white border border-slate-200 rounded-3xl p-6 shadow-sm relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-5">
+                    <Shield size={120} />
+                  </div>
+                  <div className="relative z-10 flex flex-col h-full justify-between">
+                    <div>
+                      <div className="flex items-start justify-between mb-6">
+                        <div className="w-16 h-16 bg-slate-100 rounded-2xl flex items-center justify-center text-2xl font-black text-slate-400">
+                          {editCompanyName ? editCompanyName.substring(0, 2).toUpperCase() : 'TC'}
+                        </div>
+                        <Badge className="bg-emerald-100 text-emerald-700 border-none px-3 py-1 text-xs">
+                          Verified
+                        </Badge>
+                      </div>
+                      <h3 className="text-xl font-bold text-slate-900 mb-1">{companyName}</h3>
+                      <p className="text-slate-500 font-medium text-sm">+91 98765 43210</p>
+                    </div>
+                    <div className="mt-6 pt-6 border-t border-slate-100 flex items-center gap-2 text-xs font-bold text-slate-400 uppercase tracking-wider">
+                      <CheckCircle2 size={14} className="text-emerald-500" />
+                      <span>Active Account</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Quick Actions / Stats */}
+                <div className="flex-1 flex flex-col gap-4">
+                  <Link to="/settings/devices" className="flex-1 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-3xl p-6 text-white relative overflow-hidden group hover:shadow-lg hover:shadow-indigo-500/20 transition-all">
+                    <div className="absolute right-0 bottom-0 p-3 opacity-10 group-hover:scale-110 transition-transform">
+                      <Smartphone size={80} />
+                    </div>
+                    <div className="relative z-10">
+                      <div className="w-10 h-10 bg-white/20 backdrop-blur-md rounded-xl flex items-center justify-center mb-4">
+                        <Shield size={20} />
+                      </div>
+                      <h3 className="text-lg font-bold">Active Devices</h3>
+                      <p className="text-indigo-100 text-sm mb-4 opacity-90">Manage login sessions</p>
+                      <div className="inline-flex items-center gap-2 bg-white/10 backdrop-blur-md px-3 py-1.5 rounded-lg text-xs font-bold hover:bg-white/20 transition-colors">
+                        <span>Manage</span>
+                        <ArrowRight size={14} />
+                      </div>
+                    </div>
+                  </Link>
+                </div>
+              </div>
+
+              {/* Change PIN Section */}
+              <div className="bg-white border border-slate-200 rounded-3xl p-8 shadow-sm">
+                <div className="flex items-center justify-between mb-8">
+                  <div>
+                    <h3 className="text-xl font-bold text-slate-900">Security PIN</h3>
+                    <p className="text-slate-500 text-sm mt-1">Update your 6-digit access PIN</p>
+                  </div>
+                  <div className="w-10 h-10 bg-slate-50 rounded-full flex items-center justify-center text-slate-400">
+                    <Lock size={20} />
+                  </div>
+                </div>
+
+                <div className="grid md:grid-cols-2 gap-x-12 gap-y-8">
+                  <div className="space-y-6">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Current PIN</label>
+                      <Input type="password" placeholder="••••••" className="h-12 bg-slate-50 border-slate-200 focus:bg-white text-center tracking-[0.5em] font-bold text-lg rounded-xl" />
+                    </div>
+                    <button className="text-sm font-bold text-slate-400 hover:text-indigo-600 transition-colors">
+                      Forgot your PIN?
+                    </button>
+                  </div>
+
+                  <div className="space-y-5 bg-slate-50/50 p-6 rounded-2xl border border-slate-100">
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">New PIN</label>
+                      <Input type="password" placeholder="••••••" className="h-12 bg-white border-slate-200 text-center tracking-[0.5em] font-bold text-lg rounded-xl" />
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-slate-500 uppercase tracking-wider ml-1">Confirm New PIN</label>
+                      <Input type="password" placeholder="••••••" className="h-12 bg-white border-slate-200 text-center tracking-[0.5em] font-bold text-lg rounded-xl" />
+                    </div>
+                    <Button className="w-full bg-slate-900 hover:bg-slate-800 h-12 rounded-xl shadow-lg shadow-slate-900/10 text-base">
+                      Update Password
+                    </Button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Danger Zone */}
+              <div className="border border-red-100 rounded-3xl p-1 bg-red-50/30">
+                <div className="p-6 md:p-8 flex flex-col md:flex-row items-center justify-between gap-6">
+                  <div className="flex gap-4">
+                    <div className="w-12 h-12 bg-red-100 rounded-2xl flex items-center justify-center shrink-0">
+                      <AlertTriangle className="text-red-600" size={24} />
+                    </div>
+                    <div>
+                      <h3 className="text-lg font-bold text-red-700">Deactivate Account</h3>
+                      <p className="text-red-600/70 text-sm mt-1 max-w-md">
+                        This action is permanent and cannot be undone. All your data will be wiped immediately.
+                      </p>
+                    </div>
+                  </div>
+                  <Button variant="outline" className="border-red-200 text-red-600 hover:bg-red-600 hover:text-white hover:border-red-600 h-11 px-6 rounded-xl font-bold transition-all whitespace-nowrap w-full md:w-auto">
+                    Delete Account
+                  </Button>
+                </div>
+              </div>
+
             </div>
           </TabsContent>
         </div>
