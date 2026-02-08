@@ -79,7 +79,7 @@ const Layout = ({ children }) => {
             <TopHeader />
 
             {/* Main Content Area */}
-            <main className="transition-all duration-300 md:ml-72 pt-20 pb-24 md:py-8 min-h-screen">
+            <main className="transition-all duration-300 md:ml-72 pt-20 pb-24 md:py-12 min-h-screen">
                 <div className="max-w-7xl mx-auto px-4 sm:px-6 md:px-8">
                     {children}
                 </div>
