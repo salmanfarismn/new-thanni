@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import '@/App.css';
 import Dashboard from './pages/Dashboard';
 import Orders from './pages/Orders';
+import Customers from './pages/Customers';
 import Stock from './pages/Stock';
 import WhatsAppConnect from './pages/WhatsAppConnect';
 import Settings from './pages/Settings';
@@ -39,6 +40,13 @@ function App() {
               <PrivateRoute>
                 <Layout>
                   <Orders />
+                </Layout>
+              </PrivateRoute>
+            } />
+            <Route path="/customers" element={
+              <PrivateRoute>
+                <Layout>
+                  <Customers />
                 </Layout>
               </PrivateRoute>
             } />

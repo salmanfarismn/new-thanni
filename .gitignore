@@ -79,5 +79,42 @@ agenthub/agents/youtube/db
 # Mobile development
 android-sdk/ -e 
 # Environment files
+.env
 *.env
 *.env.*
+
+# WhatsApp Auth (CRITICAL: Do NOT commit)
+whatsapp-service/auth_info/
+whatsapp-service/auth_info_*/
+auth_info/
+auth_info_*/
+
+# Logs
+*.log
+whatsapp-service/*.log
+backend/*.log
+
+# Python
+.venv/
+__pycache__/
+
+# Temp / Static / Reports
+backend/static/
+*_report.txt
+*_output.txt
+verify_*.py
+test_*.py
+check_*.py
+fix_*.py
+migrate_*.py
+clean_*.py
+final_*.py
+list_*.py
+setup_*.py
+STRATEGY_*.md
+backend_test.py
+migrate_vendor_data.py
+verify_data.py
+verify_stock_fix.py
+db_verification_output.txt
+verification_output.txt

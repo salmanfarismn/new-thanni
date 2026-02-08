@@ -29,8 +29,12 @@ app.use((req, res, next) => {
     next();
 });
 
-const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000';
+const FASTAPI_URL = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
+const SERVICE_API_KEY = process.env.SERVICE_API_KEY || 'thanni-canuuu-service-secret-key-2025';
 const PORT = process.env.PORT || 3001;
+
+// Configure axios for secure backend communication
+axios.defaults.headers.common['x-api-key'] = SERVICE_API_KEY;
 
 // ============================================
 // CONSTANTS
@@ -335,7 +339,9 @@ async function createCustomer(vendorId, phoneNumber, name, address) {
         console.log(`[API] Created customer for vendor ${vendorId.substring(0, 8)}:`, response.data);
         return response.data;
     } catch (error) {
-        console.error('[API] Error creating customer:', error.message);
+        const errorMsg = `[API] Error creating customer: ${error.message}\n`;
+        fs.appendFileSync('error.log', errorMsg);
+        console.error(errorMsg.trim());
         return null;
     }
 }
@@ -519,7 +525,7 @@ async function handleIncomingMessage(vendorId, message) {
 
         // Check if delivery staff
         const staffInfo = await checkIfDeliveryStaff(vendorId, phoneNumber);
-        if (staffInfo) {
+        if (staffInfo && staffInfo.is_staff) {
             await handleDeliveryStaffMessage(vendorId, phoneNumber, messageText, staffInfo);
             return;
         }
@@ -711,7 +717,11 @@ async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
 
     // Send helper function
     const send = async (msg) => {
-        await client.sock.sendMessage(jid, { text: msg });
+        try {
+            await client.sock.sendMessage(jid, { text: msg });
+        } catch (e) {
+            console.error(`[Error] Send failed to ${jid}:`, e.message);
+        }
     };
 
     // Get prices
@@ -1122,6 +1132,33 @@ app.post('/reconnect/:vendorId', async (req, res) => {
     res.json({ success: true, message: 'Reconnection initiated' });
 });
 
+// Simulate incoming message (for testing)
+app.post('/test/simulate-message/:vendorId', async (req, res) => {
+    const { vendorId } = req.params;
+    const { from, text } = req.body;
+
+    console.log(`[Test] Simulating message from ${from}: ${text}`);
+
+    // Create a mock message object that mimics Baileys structure
+    const mockMessage = {
+        key: {
+            remoteJid: `${from}@s.whatsapp.net`,
+            fromMe: false,
+            id: 'TEST_MSG_' + Date.now()
+        },
+        message: {
+            conversation: text
+        }
+    };
+
+    try {
+        await handleIncomingMessage(vendorId, mockMessage);
+        res.json({ success: true, message: 'Message processed' });
+    } catch (error) {
+        res.status(500).json({ success: false, error: error.message });
+    }
+});
+
 // Send message (testing)
 app.post('/send/:vendorId', async (req, res) => {
     const { vendorId } = req.params;
@@ -1162,13 +1199,62 @@ app.get('/qr', (req, res) => res.json({ message: 'Use /qr/:vendorId', activeVend
 // START SERVER
 // ============================================
 
-app.listen(PORT, () => {
+// ============================================
+// START SERVER
+// ============================================
+
+const server = app.listen(PORT, async () => {
     console.log(`\n🚀 WhatsApp Service running on port ${PORT}`);
     console.log(`📡 Backend: ${FASTAPI_URL}`);
-    console.log(`\nEndpoints:`);
-    console.log(`  GET  /status/:vendorId`);
-    console.log(`  GET  /qr/:vendorId`);
-    console.log(`  POST /init/:vendorId`);
-    console.log(`  POST /disconnect/:vendorId`);
-    console.log(`  GET  /vendors\n`);
+
+    // Auto-load existing sessions
+    try {
+        const files = fs.readdirSync(__dirname);
+        const authFolders = files.filter(f => f.startsWith('auth_info_') && fs.statSync(path.join(__dirname, f)).isDirectory());
+
+        console.log(`\n[Startup] Found ${authFolders.length} existing sessions to restore...`);
+
+        for (const folder of authFolders) {
+            const vendorId = folder.replace('auth_info_', '');
+            console.log(`[Startup] Restoring session for vendor ${vendorId.substring(0, 8)}...`);
+            // Add slight delay between inits to avoid CPU spike
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            initVendorWhatsApp(vendorId).catch(err => {
+                console.error(`[Startup] Failed to restore ${vendorId}:`, err.message);
+            });
+        }
+    } catch (error) {
+        console.error('[Startup] Error auto-loading sessions:', error);
+    }
 });
+
+// Graceful Shutdown
+const gracefulShutdown = async () => {
+    console.log('\n[Shutdown] Closing WhatsApp connections...');
+
+    for (const [vendorId, client] of vendorClients.entries()) {
+        if (client.sock) {
+            try {
+                console.log(`[Shutdown] Closing session for ${vendorId.substring(0, 8)}`);
+                client.sock.end(undefined);
+            } catch (e) {
+                console.error(`[Shutdown] Error closing ${vendorId}:`, e.message);
+            }
+        }
+    }
+
+    server.close(() => {
+        console.log('[Shutdown] Server closed.');
+        process.exit(0);
+    });
+
+    // Force close if taking too long
+    setTimeout(() => {
+        console.error('[Shutdown] Forced exit.');
+        process.exit(1);
+    }, 5000);
+};
+
+process.on('SIGINT', gracefulShutdown);
+process.on('SIGTERM', gracefulShutdown);
+

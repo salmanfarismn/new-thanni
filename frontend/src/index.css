@@ -31,6 +31,22 @@ body {
         }
     }
 
+    @keyframes slide-up {
+        from {
+            transform: translateY(100%);
+            opacity: 0;
+        }
+
+        to {
+            transform: translateY(0);
+            opacity: 1;
+        }
+    }
+
+    .animate-slide-up {
+        animation: slide-up 0.5s ease-out forwards;
+    }
+
     .glass {
         @apply bg-white/80 backdrop-blur-xl border border-white/40 shadow-glass;
     }

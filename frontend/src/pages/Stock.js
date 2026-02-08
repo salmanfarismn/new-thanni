@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../context/AppContext';
-import { Plus, Minus, Archive, RefreshCw, AlertCircle, AlertTriangle, X, Trash2, Check } from 'lucide-react';
+import { Plus, Minus, Archive, RefreshCw, AlertCircle, AlertTriangle, X, Trash2, Check, Camera, Hash, CheckCircle2, Droplets, Zap, AlertOctagon, Undo2, Truck, FileText } from 'lucide-react';
 import { toast } from 'sonner';
 import Card from '../components/ui/card';
 import Button from '../components/ui/button';
@@ -9,12 +9,12 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 
 // Damage reasons
 const DAMAGE_REASONS = [
-  { id: 'broken', label: 'Broken', icon: '💥' },
-  { id: 'leaked', label: 'Leaked', icon: '💧' },
-  { id: 'contaminated', label: 'Contaminated', icon: '☣️' },
-  { id: 'customer_return', label: 'Customer Return', icon: '↩️' },
-  { id: 'delivery_damage', label: 'Delivery Damage', icon: '🚚' },
-  { id: 'other', label: 'Other', icon: '📝' }
+  { id: 'broken', label: 'Broken / Crushed', icon: Zap, color: 'text-amber-500', bg: 'bg-amber-50' },
+  { id: 'leaked', label: 'Leakage', icon: Droplets, color: 'text-sky-500', bg: 'bg-sky-50' },
+  { id: 'contaminated', label: 'Contaminated', icon: AlertOctagon, color: 'text-purple-500', bg: 'bg-purple-50' },
+  { id: 'customer_return', label: 'Customer Return', icon: Undo2, color: 'text-indigo-500', bg: 'bg-indigo-50' },
+  { id: 'delivery_damage', label: 'Delivery Damage', icon: Truck, color: 'text-orange-500', bg: 'bg-orange-50' },
+  { id: 'other', label: 'Other Issue', icon: FileText, color: 'text-slate-500', bg: 'bg-slate-50' }
 ];
 
 export default function Stock() {
@@ -28,19 +28,24 @@ export default function Stock() {
   const [isDamageDialogOpen, setIsDamageDialogOpen] = useState(false);
   const [damageData, setDamageData] = useState({
     quantity: 1,
+    quantity_returned: 0,
     reason: '',
     notes: '',
+    order_id: '',
     litre_size: 20
   });
   const [todayDamage, setTodayDamage] = useState(null);
+  const [salesData, setSalesData] = useState(null);
 
   useEffect(() => {
     loadStock();
     loadTodayDamage();
+    loadSalesData();
   }, []);
 
   const loadStock = async () => {
     try {
+      setLoading(true);
       const response = await api.get('/stock');
       setStock(response.data);
     } catch (error) {
@@ -57,6 +62,15 @@ export default function Stock() {
       setTodayDamage(response.data);
     } catch (error) {
       console.error('Error loading damage data:', error);
+    }
+  };
+
+  const loadSalesData = async () => {
+    try {
+      const response = await api.get('/dashboard/sales?period=today');
+      setSalesData(response.data);
+    } catch (error) {
+      console.error("Error loading sales data:", error);
     }
   };
 
@@ -110,7 +124,7 @@ export default function Stock() {
       await api.post('/stock/damage', damageData);
       toast.success(`${damageData.quantity} damaged cans recorded!`);
       setIsDamageDialogOpen(false);
-      setDamageData({ quantity: 1, reason: '', notes: '', litre_size: 20 });
+      setDamageData({ quantity: 1, quantity_returned: 0, reason: '', notes: '', order_id: '', litre_size: 20 });
       loadStock();
       loadTodayDamage();
     } catch (error) {
@@ -145,12 +159,12 @@ export default function Stock() {
           <p className="text-slate-500 font-medium text-sm">Real-time inventory control</p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Report Damage Button */}
+          {/* Report Damage Button - Desktop */}
           <Button
             onClick={() => setIsDamageDialogOpen(true)}
-            className="h-10 px-4 rounded-xl bg-red-50 text-red-600 border-red-100 hover:bg-red-100 font-bold text-sm gap-2"
+            className="hidden sm:flex h-10 px-4 rounded-xl bg-red-50 text-red-600 border-red-100 hover:bg-red-100 font-bold text-sm gap-2"
           >
-            <AlertTriangle size={16} /> Report Damage
+            <AlertTriangle size={16} /> Report Issue
           </Button>
           <Button
             variant="outline"
@@ -162,6 +176,14 @@ export default function Stock() {
           </Button>
         </div>
       </div>
+
+      {/* Floating Action Button for Mobile - Report Issue */}
+      <button
+        onClick={() => setIsDamageDialogOpen(true)}
+        className="fixed bottom-24 right-6 z-40 sm:hidden w-14 h-14 bg-red-500 text-white rounded-full shadow-xl shadow-red-500/30 flex items-center justify-center active:scale-90 transition-transform animate-bounce-subtle"
+      >
+        <AlertTriangle size={24} />
+      </button>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
         {/* Left Column: Visual & Stats (lg:col-span-7) */}
@@ -210,7 +232,7 @@ export default function Stock() {
             </div>
 
             {/* Bottom Info */}
-            <div className="relative z-10 grid grid-cols-3 gap-3 sm:gap-4 mt-6 sm:mt-8">
+            <div className="relative z-10 grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mt-6 sm:mt-8">
               <div className="bg-white/5 rounded-2xl p-3 sm:p-4 backdrop-blur-sm border border-white/5">
                 <div className="text-sky-200/60 text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-1">Used</div>
                 <div className="text-xl sm:text-2xl font-black text-white">{usedStock}</div>
@@ -218,6 +240,10 @@ export default function Stock() {
               <div className="bg-white/5 rounded-2xl p-3 sm:p-4 backdrop-blur-sm border border-white/5">
                 <div className="text-emerald-200/60 text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-1">Orders</div>
                 <div className="text-xl sm:text-2xl font-black text-emerald-400">{stock?.orders_count || 0}</div>
+              </div>
+              <div className="bg-white/5 rounded-2xl p-3 sm:p-4 backdrop-blur-sm border border-white/5">
+                <div className="text-amber-200/60 text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-1">Collected</div>
+                <div className="text-xl sm:text-2xl font-black text-amber-400">{salesData?.empty_cans_collected || 0}</div>
               </div>
               <div className="bg-red-500/10 rounded-2xl p-3 sm:p-4 backdrop-blur-sm border border-red-500/20">
                 <div className="text-red-200/60 text-[10px] sm:text-xs font-bold uppercase tracking-wider mb-1">Damaged</div>
@@ -241,15 +267,21 @@ export default function Stock() {
                 </div>
               </div>
               <div className="space-y-2">
-                {todayDamage.records?.map((record, index) => (
-                  <div key={index} className="flex items-center justify-between p-3 bg-white rounded-xl border border-red-100">
-                    <div className="flex items-center gap-2">
-                      <span className="text-lg">{DAMAGE_REASONS.find(r => r.id === record.reason)?.icon || '📝'}</span>
-                      <span className="font-medium text-red-900 text-sm">{DAMAGE_REASONS.find(r => r.id === record.reason)?.label || record.reason}</span>
+                {todayDamage.records?.map((record, index) => {
+                  const reasonObj = DAMAGE_REASONS.find(r => r.id === record.reason);
+                  const Icon = reasonObj?.icon || AlertCircle;
+                  return (
+                    <div key={index} className="flex items-center justify-between p-3 bg-white rounded-xl border border-red-100">
+                      <div className="flex items-center gap-2">
+                        <div className={`p-1.5 rounded-lg ${reasonObj?.bg || 'bg-slate-50'} ${reasonObj?.color || 'text-slate-500'}`}>
+                          <Icon size={16} />
+                        </div>
+                        <span className="font-medium text-red-900 text-sm">{reasonObj?.label || record.reason}</span>
+                      </div>
+                      <Badge variant="error" className="font-bold">{record.quantity} cans</Badge>
                     </div>
-                    <Badge variant="error" className="font-bold">{record.quantity} cans</Badge>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}
@@ -355,106 +387,171 @@ export default function Stock() {
 
       {/* Report Damage Dialog */}
       <Dialog open={isDamageDialogOpen} onOpenChange={setIsDamageDialogOpen}>
-        <DialogContent className="w-[95vw] sm:max-w-md max-h-[85vh] bg-white rounded-[32px] p-0 overflow-hidden border-0 shadow-2xl flex flex-col">
-          <DialogHeader className="p-6 pb-4 flex-shrink-0 bg-white border-b border-slate-50">
-            <DialogTitle className="text-xl font-black text-slate-900 flex items-center gap-2">
-              <div className="p-2 bg-red-100 rounded-xl text-red-600">
-                <AlertTriangle size={18} />
+        <DialogContent className="fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-0 shadow-lg duration-200 sm:rounded-lg md:w-full">
+          <DialogHeader className="p-6 pb-2 border-b border-slate-50">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-full bg-red-50 flex items-center justify-center text-red-500">
+                <AlertTriangle size={20} fill="currentColor" className="opacity-20" />
+                <AlertTriangle size={20} className="absolute" />
               </div>
-              Report Damaged Cans
-            </DialogTitle>
-            <DialogDescription className="text-slate-500 text-sm mt-1">
-              Record damaged, broken, or leaked cans to deduct from inventory.
-            </DialogDescription>
+              <div>
+                <DialogTitle className="text-xl font-black text-slate-900 tracking-tight">Report Issue</DialogTitle>
+                <DialogDescription className="text-slate-500 font-medium text-xs">Record damaged stock. Inventory will be deducted.</DialogDescription>
+              </div>
+            </div>
           </DialogHeader>
 
-          <div className="flex-1 overflow-y-auto p-6 space-y-6">
-            {/* Quantity Input */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Quantity</label>
-              <div className="flex items-center justify-center gap-4 p-4 bg-slate-50 rounded-2xl">
-                <button
-                  onClick={() => setDamageData(prev => ({ ...prev, quantity: Math.max(1, prev.quantity - 1) }))}
-                  className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-slate-500 flex items-center justify-center active:scale-95"
-                >
-                  <Minus size={18} />
-                </button>
-                <div className="text-center">
+          <div className="flex-1 overflow-y-auto p-6 space-y-8 max-h-[70vh]">
+
+            {/* 1. Can Config Section */}
+            <div className="space-y-4">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Can Configuration</label>
+              </div>
+
+              <div className="p-1 bg-slate-100/80 rounded-2xl flex relative">
+                {[20, 25].map((size) => (
+                  <button
+                    key={size}
+                    onClick={() => setDamageData(prev => ({ ...prev, litre_size: size }))}
+                    className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl text-sm font-bold transition-all relative z-10 ${damageData.litre_size === size
+                      ? 'bg-white text-slate-900 shadow-sm ring-1 ring-black/5'
+                      : 'text-slate-400 hover:text-slate-600'
+                      }`}
+                  >
+                    <Droplets size={14} className={damageData.litre_size === size ? 'text-sky-500' : 'text-slate-300'} />
+                    {size} Litre
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* 2. Quantity Inputs Grid */}
+            <div className="grid grid-cols-2 gap-4">
+              {/* Damaged */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-red-400 uppercase tracking-wider ml-1">Damaged Qty</label>
+                <div className="bg-red-50/50 border border-red-100 rounded-2xl p-1 flex items-center justify-between relative overflow-hidden group hover:border-red-200 transition-colors">
+                  <button
+                    onClick={() => setDamageData(prev => ({ ...prev, quantity: Math.max(1, prev.quantity - 1) }))}
+                    className="w-12 h-12 flex items-center justify-center rounded-xl bg-white text-red-400 shadow-sm border border-red-50 active:scale-95 transition-transform"
+                  >
+                    <Minus size={20} strokeWidth={3} />
+                  </button>
                   <input
                     type="number"
                     value={damageData.quantity}
                     onChange={(e) => setDamageData(prev => ({ ...prev, quantity: Math.max(1, parseInt(e.target.value) || 1) }))}
-                    className="w-20 text-center text-3xl font-black bg-transparent border-none focus:ring-0 p-0"
+                    className="w-full text-center bg-transparent border-none text-2xl font-black text-red-600 focus:ring-0 p-0"
                   />
-                  <div className="text-[10px] font-bold text-slate-400 uppercase">cans</div>
-                </div>
-                <button
-                  onClick={() => setDamageData(prev => ({ ...prev, quantity: prev.quantity + 1 }))}
-                  className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-slate-500 flex items-center justify-center active:scale-95"
-                >
-                  <Plus size={18} />
-                </button>
-              </div>
-            </div>
-
-            {/* Can Size */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Can Size</label>
-              <div className="grid grid-cols-2 gap-3">
-                {[20, 25].map(size => (
                   <button
-                    key={size}
-                    onClick={() => setDamageData(prev => ({ ...prev, litre_size: size }))}
-                    className={`py-3 rounded-xl border-2 font-bold transition-all ${damageData.litre_size === size
-                      ? 'bg-red-50 border-red-500 text-red-600'
-                      : 'bg-white border-slate-200 text-slate-500 hover:border-slate-300'
-                      }`}
+                    onClick={() => setDamageData(prev => ({ ...prev, quantity: prev.quantity + 1 }))}
+                    className="w-12 h-12 flex items-center justify-center rounded-xl bg-red-500 text-white shadow-md shadow-red-500/20 active:scale-95 transition-transform"
                   >
-                    {size}L
+                    <Plus size={20} strokeWidth={3} />
                   </button>
-                ))}
+                </div>
+              </div>
+
+              {/* Returned */}
+              <div className="space-y-2">
+                <label className="text-[10px] font-black text-slate-400 uppercase tracking-wider ml-1">Returned Empty</label>
+                <div className="bg-slate-50 border border-slate-100 rounded-2xl p-1 flex items-center justify-between relative overflow-hidden group hover:border-slate-200 transition-colors">
+                  <button
+                    onClick={() => setDamageData(prev => ({ ...prev, quantity_returned: Math.max(0, prev.quantity_returned - 1) }))}
+                    className="w-12 h-12 flex items-center justify-center rounded-xl bg-white text-slate-400 shadow-sm border border-slate-100 active:scale-95 transition-transform"
+                  >
+                    <Minus size={20} strokeWidth={3} />
+                  </button>
+                  <input
+                    type="number"
+                    value={damageData.quantity_returned}
+                    onChange={(e) => setDamageData(prev => ({ ...prev, quantity_returned: Math.max(0, parseInt(e.target.value) || 0) }))}
+                    className="w-full text-center bg-transparent border-none text-2xl font-black text-slate-700 focus:ring-0 p-0"
+                  />
+                  <button
+                    onClick={() => setDamageData(prev => ({ ...prev, quantity_returned: prev.quantity_returned + 1 }))}
+                    className="w-12 h-12 flex items-center justify-center rounded-xl bg-slate-900 text-white shadow-md shadow-slate-900/20 active:scale-95 transition-transform"
+                  >
+                    <Plus size={20} strokeWidth={3} />
+                  </button>
+                </div>
               </div>
             </div>
 
-            {/* Damage Reason */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Reason *</label>
-              <div className="grid grid-cols-2 gap-2">
+            {/* 3. Reason Selection */}
+            <div className="space-y-3">
+              <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Issue Type *</label>
+              <div className="grid grid-cols-2 gap-3">
                 {DAMAGE_REASONS.map(reason => (
                   <button
                     key={reason.id}
                     onClick={() => setDamageData(prev => ({ ...prev, reason: reason.id }))}
-                    className={`py-3 px-4 rounded-xl border-2 text-left transition-all flex items-center gap-2 ${damageData.reason === reason.id
-                      ? 'bg-red-50 border-red-500 text-red-700'
-                      : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
+                    className={`relative p-4 rounded-2xl border-2 text-left transition-all group overflow-hidden ${damageData.reason === reason.id
+                      ? 'bg-slate-900 border-slate-900 text-white shadow-lg shadow-slate-900/10'
+                      : 'bg-white border-slate-100 text-slate-500 hover:border-slate-200 hover:bg-slate-50'
                       }`}
                   >
-                    <span className="text-lg">{reason.icon}</span>
-                    <span className="font-bold text-sm">{reason.label}</span>
+                    <div className="relative z-10 flex flex-col gap-3">
+                      <div className={`w-10 h-10 rounded-xl flex items-center justify-center transition-colors ${damageData.reason === reason.id ? 'bg-white/20 text-white' : `${reason.bg} ${reason.color}`}`}>
+                        {(() => {
+                          const Icon = reason.icon;
+                          return <Icon size={20} />;
+                        })()}
+                      </div>
+                      <span className="font-bold text-xs">{reason.label}</span>
+                    </div>
+                    {damageData.reason === reason.id && (
+                      <div className="absolute top-3 right-3 text-white">
+                        <CheckCircle2 size={18} fill="white" className="text-emerald-500" />
+                      </div>
+                    )}
                   </button>
                 ))}
               </div>
             </div>
 
-            {/* Notes */}
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">Notes (Optional)</label>
-              <textarea
-                value={damageData.notes}
-                onChange={(e) => setDamageData(prev => ({ ...prev, notes: e.target.value }))}
-                placeholder="Additional details..."
-                rows={2}
-                className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-red-500/20 focus:border-red-500 resize-none"
-              />
+            {/* 4. Details Section */}
+            <div className="space-y-4 pt-2">
+              <div className="space-y-3">
+                <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Order Ref (Optional)</label>
+                <div className="relative group">
+                  <Hash className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-300 group-focus-within:text-sky-500 transition-colors" size={16} />
+                  <input
+                    type="text"
+                    value={damageData.order_id}
+                    onChange={(e) => setDamageData(prev => ({ ...prev, order_id: e.target.value }))}
+                    placeholder="ORD-123..."
+                    className="w-full pl-11 pr-4 py-3.5 bg-slate-50 border-transparent rounded-2xl text-sm font-bold text-slate-900 placeholder:text-slate-400 focus:bg-white focus:border-slate-200 focus:ring-0 transition-all"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-black text-slate-400 uppercase tracking-widest">Notes</label>
+                  <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider">Optional</span>
+                </div>
+                <textarea
+                  value={damageData.notes}
+                  onChange={(e) => setDamageData(prev => ({ ...prev, notes: e.target.value }))}
+                  placeholder="Add any specific details about the damage..."
+                  rows={3}
+                  className="w-full p-4 bg-slate-50 border-transparent rounded-2xl text-sm font-medium focus:bg-white focus:border-slate-200 focus:ring-0 transition-all resize-none placeholder:text-slate-400"
+                />
+              </div>
             </div>
+
+
+
           </div>
 
-          <DialogFooter className="p-6 pt-4 border-t border-slate-50 bg-white flex-shrink-0">
+          <DialogFooter className="p-4 bg-white border-t border-slate-50">
             <div className="flex gap-3 w-full">
               <Button
                 variant="ghost"
                 onClick={() => setIsDamageDialogOpen(false)}
-                className="flex-1 h-12 rounded-xl font-bold text-slate-500"
+                className="flex-1 h-14 rounded-2xl font-bold text-slate-500 hover:bg-slate-50 hover:text-slate-700"
               >
                 Cancel
               </Button>
@@ -462,10 +559,9 @@ export default function Stock() {
                 onClick={handleReportDamage}
                 disabled={updating || !damageData.reason}
                 isLoading={updating}
-                className="flex-1 h-12 rounded-xl bg-red-500 hover:bg-red-600 text-white font-bold shadow-lg shadow-red-500/30"
+                className="flex-[1.5] h-14 rounded-2xl bg-slate-900 hover:bg-slate-800 text-white text-base font-bold shadow-xl shadow-slate-900/20 active:scale-95 transition-all"
               >
-                <Check size={18} className="mr-2" />
-                Confirm
+                Submit Report
               </Button>
             </div>
           </DialogFooter>

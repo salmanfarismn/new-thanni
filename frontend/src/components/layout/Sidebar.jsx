@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useLocation, Link, useNavigate } from 'react-router-dom';
-import { Package, TruckIcon, Droplets, Settings, LogOut, Users, Loader2 } from 'lucide-react';
+import { Package, TruckIcon, Droplets, Settings, LogOut, Users, Loader2, UserCheck } from 'lucide-react';
 import { useCompanyName } from '../../context/AppContext';
 import api, { getVendor, removeAuthToken } from '../../api/axios';
 import { toast } from 'sonner';
@@ -8,17 +8,12 @@ import { toast } from 'sonner';
 const Sidebar = ({ className = "" }) => {
     const location = useLocation();
     const navigate = useNavigate();
-    const { companyName } = useCompanyName();
-    const [vendor, setVendor] = useState(null);
+    const { companyName, logoUrl, vendor, setVendor } = useCompanyName();
     const [loggingOut, setLoggingOut] = useState(false);
 
-    // Load vendor info from localStorage or API
+    // Initial load handled by AppContext, but we can sync here if needed
     useEffect(() => {
-        const storedVendor = getVendor();
-        if (storedVendor) {
-            setVendor(storedVendor);
-        } else {
-            // Fetch from API if not in localStorage
+        if (!vendor) {
             loadVendorInfo();
         }
     }, []);
@@ -60,7 +55,8 @@ const Sidebar = ({ className = "" }) => {
     const navItems = [
         { path: '/', icon: Package, label: 'Dashboard' },
         { path: '/orders', icon: TruckIcon, label: 'Orders' },
-        { path: '/delivery', icon: Users, label: 'Delivery Management' },
+        { path: '/customers', icon: Users, label: 'Customers' },
+        { path: '/delivery', icon: UserCheck, label: 'Delivery Staff' },
         { path: '/stock', icon: Droplets, label: 'Stock Manager' },
         { path: '/settings', icon: Settings, label: 'Settings' },
     ];
@@ -70,9 +66,16 @@ const Sidebar = ({ className = "" }) => {
             {/* Brand Section */}
             <div className="p-6 border-b border-slate-800">
                 <div className="flex items-center gap-3">
-                    <div className="w-14 h-14 bg-white rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/20 overflow-hidden">
-                        <img src="/logo.png" alt="Logo" className="w-full h-full object-contain" />
-                    </div>
+                    <Link
+                        to="/"
+                        className="group/logo relative w-14 h-14 bg-white rounded-xl flex items-center justify-center shadow-lg shadow-sky-500/20 overflow-hidden active:scale-95 transition-all"
+                    >
+                        <img
+                            src={logoUrl || "/logo.png"}
+                            alt="Logo"
+                            className="w-full h-full object-contain"
+                        />
+                    </Link>
                     <div>
                         <h1 className="text-lg font-bold tracking-tight text-white">{companyName}</h1>
                         <div className="flex items-center gap-1.5">
@@ -130,10 +133,13 @@ const Sidebar = ({ className = "" }) => {
 
                     {/* Vendor Info */}
                     <div className="flex-1 overflow-hidden">
-                        <p className="text-sm font-medium text-white truncate">
-                            {vendor?.business_name || 'Loading...'}
+                        <p className="text-sm font-bold text-white truncate">
+                            {vendor?.name || 'Loading...'}
                         </p>
-                        <p className="text-xs text-slate-500 truncate">
+                        <p className="text-[10px] text-slate-500 truncate font-medium uppercase tracking-wider">
+                            {vendor?.business_name || ''}
+                        </p>
+                        <p className="text-[11px] text-sky-400/80 truncate font-mono mt-0.5">
                             {vendor?.phone || ''}
                         </p>
                     </div>

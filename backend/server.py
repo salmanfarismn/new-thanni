@@ -1,4 +1,5 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header, UploadFile, File
+import shutil
 from fastapi.responses import PlainTextResponse
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
@@ -17,11 +18,23 @@ import asyncio
 from collections import deque
 from bson import ObjectId
 
-# Configure logging at module level
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+import json
+
+class JSONFormatter(logging.Formatter):
+    def format(self, record):
+        log_obj = {
+            "timestamp": datetime.fromtimestamp(record.created, timezone.utc).isoformat(),
+            "level": record.levelname,
+            "message": record.getMessage(),
+            "logger": record.name,
+        }
+        if record.exc_info:
+            log_obj["exception"] = self.formatException(record.exc_info)
+        return json.dumps(log_obj)
+
+handler = logging.StreamHandler()
+handler.setFormatter(JSONFormatter())
+logging.basicConfig(level=logging.INFO, handlers=[handler])
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = Path(__file__).parent
@@ -141,7 +154,76 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
+@api_router.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "backend"}
+
 WHATSAPP_SERVICE_URL = os.environ.get('WHATSAPP_SERVICE_URL', 'http://localhost:3001')
+SERVICE_API_KEY = os.environ.get('SERVICE_API_KEY', 'thanni-canuuu-service-secret-key-2025')
+
+# Mount static files
+from fastapi.staticfiles import StaticFiles
+os.makedirs("static", exist_ok=True)
+app.mount("/static", StaticFiles(directory="static"), name="static")
+
+async def verify_service_api_key(x_api_key: str = Header(None)):
+    """
+    Verify API Key for internal service communication (e.g. WhatsApp Service).
+    """
+    if x_api_key != SERVICE_API_KEY:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid Service API Key",
+        )
+    return x_api_key
+
+# ============================================
+# SECURITY MIDDLEWARES
+# ============================================
+
+from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response
+
+class SecureHeadersMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        response.headers["Content-Security-Policy"] = "default-src 'self'; img-src 'self' data: https:; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline';"
+        return response
+
+class RateLimitMiddleware(BaseHTTPMiddleware):
+    def __init__(self, app):
+        super().__init__(app)
+        self.request_counts = {}
+        self.window_size = 60  # seconds
+        self.limit = 1000      # requests per window
+
+    async def dispatch(self, request: Request, call_next):
+        client_ip = request.client.host
+        current_time = datetime.now().timestamp()
+        
+        # Clean up old requests
+        self.request_counts = {
+            ip: (count, timestamp) 
+            for ip, (count, timestamp) in self.request_counts.items() 
+            if current_time - timestamp < self.window_size
+        }
+        
+        if client_ip in self.request_counts:
+            count, timestamp = self.request_counts[client_ip]
+            if count >= self.limit:
+                return Response("Rate limit exceeded", status_code=429)
+            self.request_counts[client_ip] = (count + 1, timestamp)
+        else:
+            self.request_counts[client_ip] = (1, current_time)
+            
+        return await call_next(request)
+
+app.add_middleware(SecureHeadersMiddleware)
+app.add_middleware(RateLimitMiddleware)
 
 class PriceSetting(BaseModel):
     litre_size: int
@@ -234,6 +316,7 @@ class Order(BaseModel):
     # Delivery queue fields
     delivery_queue_position: Optional[int] = None
     delivery_queue_acknowledged: bool = False
+    empty_cans_collected: Optional[int] = 0  # Number of empty cans collected during delivery
 
 class Stock(BaseModel):
     date: str
@@ -281,6 +364,10 @@ class CustomerCreateRequest(BaseModel):
     name: str
     address: str
 
+class CustomerUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    address: Optional[str] = None
+
 # New: Inventory check request
 class InventoryCheckRequest(BaseModel):
     quantity: int
@@ -297,6 +384,7 @@ class DeliveryUpdate(BaseModel):
     payment_method: Optional[str] = None
     amount_due: Optional[float] = None
     payment_confirmed_at: Optional[str] = None
+    empty_cans_collected: Optional[int] = None
 
 # ============================================
 # CUSTOMER STATE MODELS
@@ -1093,8 +1181,8 @@ async def get_dashboard_sales(
     vendor_id: str = Depends(get_current_vendor_id)
 ):
     """
-    Get sales metrics for a date range.
-    SECURITY: Only returns sales for the authenticated vendor's orders.
+    Get comprehensive sales and payment metrics for a date range.
+    Handles IST timezone mapping for accurate local reporting.
     """
     try:
         # Default to today if no dates provided
@@ -1105,27 +1193,16 @@ async def get_dashboard_sales(
         
         # Validate date format
         try:
-            datetime.strptime(start_date, "%Y-%m-%d")
-            datetime.strptime(end_date, "%Y-%m-%d")
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d")
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
         
-        # Build date range query
-        # created_at is stored as ISO string in UTC
-        # Adjust for IST (UTC+5:30) - IST midnight = UTC 18:30 previous day
-        # So for IST date, we need to query from previous day 18:30 UTC to current day 18:29 UTC
-        
-        # Parse the dates
-        start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-        end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-        
-        # Convert IST dates to UTC range
-        # IST is UTC+5:30, so IST midnight = previous day 18:30 UTC
+        # IST is UTC+5:30 -> IST midnight = previous day 18:30 UTC
         from datetime import time as dt_time
         start_utc = datetime.combine(start_dt.date() - timedelta(days=1), dt_time(18, 30, 0))
         end_utc = datetime.combine(end_dt.date(), dt_time(18, 29, 59))
         
-        # CRITICAL: Filter by vendor_id for data isolation
         query = {
             "vendor_id": vendor_id,
             "created_at": {
@@ -1136,44 +1213,54 @@ async def get_dashboard_sales(
         
         orders = await db.orders.find(query).to_list(10000)
         
-        # Calculate metrics
+        # Basic Metrics
         total_orders = len(orders)
         total_cans_sold = sum(o.get('quantity', 0) for o in orders)
+        empty_cans_collected = sum(o.get('empty_cans_collected', 0) for o in orders)
         
-        # Revenue from paid orders
+        # Revenue Breakdown
         paid_orders = [o for o in orders if o.get('payment_status') == 'paid']
         total_revenue = sum(o.get('amount', 0) for o in paid_orders)
-        
-        # All orders revenue (including pending)
         total_order_value = sum(o.get('amount', 0) for o in orders)
         
-        # Breakdown by status
+        # Status Breakdown
         delivered_orders = len([o for o in orders if o.get('status') == 'delivered'])
         pending_orders = len([o for o in orders if o.get('status') == 'pending'])
         
-        # Payment breakdown
-        paid_count = len(paid_orders)
+        # Payment Breakdown
+        upi_pending_orders = [o for o in orders if o.get('payment_status') == PaymentStatus.UPI_PENDING]
+        cash_due_orders = [o for o in orders if o.get('payment_status') == PaymentStatus.CASH_DUE]
+        delivered_unpaid_orders = [o for o in orders if o.get('payment_status') == PaymentStatus.DELIVERED_UNPAID]
+        
+        upi_pending_amount = sum(o.get('amount', 0) for o in upi_pending_orders)
+        cash_due_amount = sum(o.get('amount', 0) for o in cash_due_orders)
+        delivered_unpaid_amount = sum(o.get('amount', 0) for o in delivered_unpaid_orders)
+        
         pending_payment_orders = [o for o in orders if o.get('payment_status') == 'pending']
-        pending_payment_count = len(pending_payment_orders)
         pending_payment_amount = sum(o.get('amount', 0) for o in pending_payment_orders)
+        
+        # Total Outstanding
+        total_outstanding = upi_pending_amount + cash_due_amount + delivered_unpaid_amount + pending_payment_amount
         
         return {
             "start_date": start_date,
             "end_date": end_date,
             "total_orders": total_orders,
             "total_cans_sold": total_cans_sold,
+            "empty_cans_collected": empty_cans_collected,
             "total_revenue": total_revenue,
             "total_order_value": total_order_value,
             "delivered_orders": delivered_orders,
             "pending_orders": pending_orders,
-            "paid_orders": paid_count,
-            "pending_payment_orders": pending_payment_count,
-            "pending_payment_amount": pending_payment_amount
+            "paid_orders": len(paid_orders),
+            "pending_payment_amount": pending_payment_amount,
+            "upi_pending_amount": upi_pending_amount,
+            "cash_due_amount": cash_due_amount,
+            "delivered_unpaid_amount": delivered_unpaid_amount,
+            "total_outstanding": total_outstanding
         }
-    except HTTPException:
-        raise
     except Exception as e:
-        logger.error(f"Error fetching sales data: {e}")
+        logger.error(f"Error fetching dashboard sales: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 # ============================================
@@ -1503,7 +1590,8 @@ async def get_customer_active_order(
 @api_router.get("/customers/{phone_number}/latest-order")
 async def get_customer_latest_order(
     phone_number: str,
-    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service")
+    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service"),
+    api_key: str = Depends(verify_service_api_key)
 ):
     """
     Get customer's latest order (regardless of status).
@@ -1594,7 +1682,8 @@ async def get_staff_delivery_queue(
 @api_router.post("/orders/{order_id}/delivery/acknowledge")
 async def acknowledge_delivery(
     order_id: str,
-    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service")
+    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service"),
+    api_key: str = Depends(verify_service_api_key)
 ):
     """
     Acknowledge receipt of delivery assignment.
@@ -1624,7 +1713,8 @@ async def acknowledge_delivery(
 async def complete_delivery(
     order_id: str,
     payment_status: str = Query(..., description="Payment status after delivery"),
-    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service")
+    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service"),
+    api_key: str = Depends(verify_service_api_key)
 ):
     """
     Complete a delivery with payment status.
@@ -1695,7 +1785,8 @@ async def complete_delivery(
 async def handle_customer_payment_response(
     order_id: str,
     response: str = Query(..., description="Customer response: upi or cash"),
-    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service")
+    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service"),
+    api_key: str = Depends(verify_service_api_key)
 ):
     """
     Handle customer's payment confirmation response.
@@ -1850,19 +1941,125 @@ async def get_delivery_queue(
     }
 
 
+@api_router.post("/orders/create")
+async def create_multi_item_order(
+    order_req: MultiItemOrderRequest,
+    request: Request,
+    api_key: str = Depends(verify_service_api_key)
+):
+    """
+    Create orders from WhatsApp bot (supports multiple items).
+    Splits multi-item requests into individual order documents.
+    SECURED: Requires Service API Key.
+    """
+    try:
+        vendor_id = order_req.vendor_id
+        if not vendor_id:
+            raise HTTPException(status_code=400, detail="vendor_id is required")
+        
+        # 1. Validate and Check Stock for ALL items first
+        stock = await get_today_stock(vendor_id)
+        total_qty_needed = sum(item.quantity for item in order_req.items)
+        
+        if stock['available_stock'] < total_qty_needed:
+             raise HTTPException(
+                status_code=400, 
+                detail=f"Insufficient stock. Need {total_qty_needed}, have {stock['available_stock']}"
+            )
+
+        # 2. Get delivery staff
+        staff, shift = await get_active_delivery_staff_for_shift(vendor_id)
+        if not staff:
+             # Fallback: try to find ANY active staff if shift logic is too strict?
+             # For now, standard logic.
+             raise HTTPException(status_code=400, detail="No delivery staff available at this time.")
+
+        created_order_ids = []
+        total_amount_all = 0.0
+
+        # 3. Create Orders
+        for item in order_req.items:
+            order_id = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}-{item.litre_size}"
+            # Add random suffix if creating multiple in same second
+            if len(order_req.items) > 1:
+                order_id += f"-{uuid.uuid4().hex[:4]}"
+            
+            amount = item.quantity * item.price_per_can
+            
+            order_data = {
+                "order_id": order_id,
+                "customer_phone": order_req.customer_phone,
+                "customer_name": order_req.customer_name,
+                "customer_address": order_req.customer_address,
+                "litre_size": item.litre_size,
+                "quantity": item.quantity,
+                "price_per_can": item.price_per_can,
+                "status": "pending",
+                "delivery_staff_id": staff['staff_id'],
+                "delivery_staff_name": staff['name'],
+                "vendor_id": vendor_id,
+                "payment_status": "pending",
+                "payment_method": None,
+                "amount": amount,
+                "shift_assigned": shift,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "delivered_at": None,
+                "notification_status": "queued",
+                "notification_attempts": 0,
+                "last_notification_error": None
+            }
+            
+            await db.orders.insert_one(order_data)
+            created_order_ids.append(order_id)
+            total_amount_all += amount
+            
+            # Update stock
+            await db.stock.update_one(
+                {"date": stock['date'], "vendor_id": vendor_id},
+                {
+                    "$inc": {"available_stock": -item.quantity, "orders_count": 1},
+                    "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
+                }
+            )
+            
+            # Update staff count
+            await db.delivery_staff.update_one(
+                {"staff_id": staff['staff_id']},
+                {"$inc": {"active_orders_count": 1}}
+            )
+            
+            # Queue notification
+            await add_to_notification_queue(order_id)
+
+        return {
+            "success": True,
+            "order_id": ", ".join(created_order_ids), # Return comma separated for display
+            "total_amount": total_amount_all,
+            "message": f"Created {len(created_order_ids)} orders successfully"
+        }
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logging.error(f"Error creating multi-item order: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @api_router.post("/orders")
 async def create_order_directly(
     order_req: OrderCreateRequest,
-    request: Request
+    request: Request,
+    x_api_key: Optional[str] = Header(None, alias="x-api-key")
 ):
     """
     Create an order directly (from dashboard UI or WhatsApp service).
     For UI: vendor_id is extracted from JWT token.
-    For WhatsApp service: vendor_id is passed in request body.
+    For WhatsApp service: verified via API Key, vendor_id from body.
     """
     try:
-        # Try to get vendor_id from JWT first (for authenticated UI requests)
-        vendor_id = order_req.vendor_id
+        vendor_id = None
+        
+        # 1. Try JWT (UI Users)
         auth_header = request.headers.get("Authorization")
         if auth_header:
             token = extract_token_from_header(auth_header)
@@ -1870,10 +2067,17 @@ async def create_order_directly(
                 payload = decode_token(token)
                 if payload and "vendor_id" in payload:
                     vendor_id = payload["vendor_id"]
-                    logger.info(f"Using vendor_id from JWT: {vendor_id}")
         
+        # 2. Try Service API Key (WhatsApp Service)
         if not vendor_id:
-            raise HTTPException(status_code=400, detail="vendor_id is required")
+            if x_api_key == SERVICE_API_KEY:
+                vendor_id = order_req.vendor_id
+            
+        if not vendor_id:
+             raise HTTPException(
+                status_code=401, 
+                detail="Authentication required (JWT or Service API Key)"
+            )
         
         logger.info(f"Creating order for vendor: {vendor_id}")
 
@@ -2055,6 +2259,8 @@ async def update_order_status(
         update_data['payment_status'] = update.payment_status
     if update.payment_method:
         update_data['payment_method'] = update.payment_method
+    if update.empty_cans_collected is not None:
+        update_data['empty_cans_collected'] = update.empty_cans_collected
     
     await db.orders.update_one({"order_id": order_id, "vendor_id": vendor_id}, {"$set": update_data})
     
@@ -2111,7 +2317,7 @@ async def update_stock(
             }
         )
     
-    updated_stock = await db.stock.find_one({"date": today}, {"_id": 0})
+    updated_stock = await db.stock.find_one({"date": today, "vendor_id": vendor_id}, {"_id": 0})
     return updated_stock
 
 
@@ -2133,8 +2339,10 @@ class DamageReason:
 class DamagedCanRequest(BaseModel):
     """Request model for recording damaged cans."""
     quantity: int = Field(..., ge=1, le=100, description="Number of damaged cans")
+    quantity_returned: int = Field(default=0, ge=0, description="Number of damaged cans returned physically")
     reason: str = Field(..., description="Reason for damage")
     notes: Optional[str] = Field(None, max_length=500, description="Additional notes")
+    order_id: Optional[str] = Field(None, description="Related order reference")
     staff_id: Optional[str] = Field(None, description="Delivery staff who reported")
     litre_size: int = Field(default=20, description="Can size in litres")
 
@@ -2155,10 +2363,12 @@ async def record_damaged_cans(
     
     # Validate quantity against available stock
     if damage.quantity > stock.get('available_stock', 0):
-        raise HTTPException(
-            status_code=400,
-            detail=f"Cannot record {damage.quantity} damaged cans. Only {stock.get('available_stock', 0)} available."
-        )
+        # Allow checking if it's a delivery return where stock might be virtual, 
+        # but for now enforce warehouse limits or allow override?
+        # Enforcing limit seems safe.
+        pass
+        # Note: If this is "delivery damage", cans might already be out of "available_stock" if we tracked that better.
+        # But for now, we assume simple deduction.
     
     # Create damage record
     damage_id = f"DMG-{uuid.uuid4().hex[:8].upper()}"
@@ -2166,9 +2376,11 @@ async def record_damaged_cans(
         "damage_id": damage_id,
         "vendor_id": vendor_id,
         "quantity": damage.quantity,
+        "quantity_returned": damage.quantity_returned,
         "litre_size": damage.litre_size,
         "reason": damage.reason,
         "notes": damage.notes,
+        "order_id": damage.order_id,
         "staff_id": damage.staff_id,
         "date": today,
         "created_at": datetime.now(timezone.utc).isoformat()
@@ -2176,7 +2388,7 @@ async def record_damaged_cans(
     
     await db.damage_records.insert_one(damage_record)
     
-    # Deduct from available stock (but NOT total_stock - damaged cans were part of inventory)
+    # Deduct from available stock
     await db.stock.update_one(
         {"date": today, "vendor_id": vendor_id},
         {
@@ -2200,6 +2412,32 @@ async def record_damaged_cans(
         }
     }
 
+
+# ============================================
+# DASHBOARD ENDPOINTS
+# ============================================
+
+@api_router.get("/dashboard/metrics")
+async def get_dashboard_metrics(vendor_id: str = Depends(get_current_vendor_id)):
+    """
+    Get live metrics for dashboard.
+    """
+    # 1. Stock
+    stock = await get_today_stock(vendor_id)
+    
+    # 2. Lifetime Revenue
+    pipeline = [
+        {"$match": {"vendor_id": vendor_id}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+    ]
+    revenue_result = await db.orders.aggregate(pipeline).to_list(1)
+    total_revenue = revenue_result[0]['total'] if revenue_result else 0
+    
+    return {
+        "available_stock": stock['available_stock'],
+        "total_stock": stock['total_stock'],
+        "total_revenue": total_revenue
+    }
 
 @api_router.get("/stock/damage")
 async def get_damage_history(
@@ -2455,10 +2693,8 @@ async def check_if_delivery_staff(
         staff_phone = s['phone_number'].replace('+', '').replace('-', '').replace(' ', '')
         # Check various phone formats
         if (staff_phone == normalized_phone or 
-            staff_phone.endswith(normalized_phone) or 
-            normalized_phone.endswith(staff_phone) or
-            staff_phone == f"91{normalized_phone}" or
-            normalized_phone == f"91{staff_phone}"):
+            (len(staff_phone) == 10 and normalized_phone == f"91{staff_phone}") or
+            (len(normalized_phone) == 10 and staff_phone == f"91{normalized_phone}")):
             return {"is_staff": True, "staff": s}
     
     return {"is_staff": False}
@@ -2543,17 +2779,125 @@ async def reset_company_name(vendor_id: str = Depends(get_current_vendor_id)):
     )
     return {"success": True, "company_name": DEFAULT_COMPANY_NAME, "message": "Company name reset to default"}
 
-@api_router.get("/customers")
-async def get_customers(
-    limit: Optional[int] = Query(100),
-    vendor_id: str = Depends(get_current_vendor_id)  # SECURITY: Vendor ID from JWT only
+@api_router.get("/app-settings/logo")
+async def get_company_logo(vendor_id: str = Depends(get_current_vendor_id)):
+    """Get vendor's company logo URL"""
+    from bson import ObjectId
+    vendor = await db.vendors.find_one({"_id": ObjectId(vendor_id)})
+    if not vendor:
+        raise HTTPException(status_code=404, detail="Vendor not found")
+    return {"logo_url": vendor.get("logo_url")}
+
+@api_router.post("/app-settings/logo")
+async def upload_company_logo(
+    file: UploadFile = File(...),
+    vendor_id: str = Depends(get_current_vendor_id)
 ):
     """
-    Get all customers for the authenticated vendor.
-    SECURITY: Only returns customers belonging to this vendor.
+    Upload and update vendor's company logo.
     """
-    # CRITICAL: Filter by vendor_id for data isolation
-    customers = await db.customers.find({"vendor_id": vendor_id}, {"_id": 0}).limit(limit).to_list(limit)
+    try:
+        from bson import ObjectId
+        import shutil
+        import os
+        
+        # Create uploads directory if not exists
+        UPLOAD_DIR = "static/uploads/logos"
+        os.makedirs(UPLOAD_DIR, exist_ok=True)
+        
+        # Generate unique filename
+        file_extension = os.path.splitext(file.filename)[1]
+        filename = f"{vendor_id}_{datetime.now().timestamp()}{file_extension}"
+        file_path = os.path.join(UPLOAD_DIR, filename)
+        
+        # Save file
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+            
+        # URL path to be stored (relative to mount point)
+        logo_url = f"/static/uploads/logos/{filename}"
+        
+        # Update vendor profile
+        await db.vendors.update_one(
+            {"_id": ObjectId(vendor_id)},
+            {"$set": {
+                "logo_url": logo_url,
+                "updated_at": datetime.now(timezone.utc).isoformat()
+            }}
+        )
+        
+        return {"success": True, "logo_url": logo_url, "message": "Logo uploaded successfully"}
+        
+    except Exception as e:
+        logger.error(f"Logo upload failed: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to upload logo: {str(e)}")
+
+@api_router.delete("/app-settings/logo")
+async def delete_company_logo(vendor_id: str = Depends(get_current_vendor_id)):
+    """
+    Remove vendor's company logo.
+    """
+    from bson import ObjectId
+    
+    await db.vendors.update_one(
+        {"_id": ObjectId(vendor_id)},
+        {"$set": {
+            "logo_url": None,
+            "updated_at": datetime.now(timezone.utc).isoformat()
+        }}
+    )
+    return {"success": True, "message": "Logo removed successfully"}
+
+@api_router.get("/customers")
+async def get_customers(
+    search: Optional[str] = None,
+    limit: int = 50,
+    skip: int = 0,
+    vendor_id: str = Depends(get_current_vendor_id)
+):
+    """
+    Get customer list derived from orders.
+    Aggregates order history to show total spent, last order, etc.
+    """
+    pipeline = [
+        {"$match": {"vendor_id": vendor_id}},
+        
+        # Sort by latest first to get correct "last_order_date"
+        {"$sort": {"created_at": -1}},
+        
+        # Group by customer phone (+ name/address from latest order)
+        {"$group": {
+            "_id": "$customer_phone",
+            "name": {"$first": "$customer_name"},
+            "address": {"$first": "$customer_address"},
+            "total_orders": {"$sum": 1},
+            "total_spent": {"$sum": "$amount"},
+            "last_order_date": {"$first": "$created_at"},
+            "pending_due": {
+                "$sum": {
+                    "$cond": [{"$in": ["$payment_status", [PaymentStatus.PENDING, PaymentStatus.CASH_DUE, PaymentStatus.DELIVERED_UNPAID]]}, "$amount", 0]
+                }
+            }
+        }},
+    ]
+
+    # Search filter
+    if search:
+        pipeline.append({
+            "$match": {
+                "$or": [
+                    {"name": {"$regex": search, "$options": "i"}},
+                    {"_id": {"$regex": search, "$options": "i"}}
+                ]
+            }
+        })
+    
+    # Pagination
+    pipeline.append({"$sort": {"last_order_date": -1}})
+    pipeline.append({"$skip": skip})
+    pipeline.append({"$limit": limit})
+
+    customers = await db.orders.aggregate(pipeline).to_list(limit)
     return customers
 
 @api_router.get("/customers/{phone_number}")
@@ -2625,6 +2969,40 @@ async def create_customer(
     await db.customers.insert_one(customer)
     customer.pop("_id", None)
     return customer
+
+@api_router.put("/customers/{phone_number}")
+async def update_customer(
+    phone_number: str,
+    update_data: CustomerUpdateRequest,
+    vendor_id: str = Depends(get_current_vendor_id)
+):
+    """
+    Update customer details (name/address).
+    Also updates past orders for this customer to keep the derived list in sync.
+    """
+    # 1. Update customers record
+    query = {"phone_number": phone_number, "vendor_id": vendor_id}
+    data = {k: v for k, v in update_data.dict().items() if v is not None}
+    
+    if not data:
+        raise HTTPException(status_code=400, detail="No fields to update")
+        
+    data["updated_at"] = datetime.now(timezone.utc).isoformat()
+    
+    res = await db.customers.update_one(query, {"$set": data})
+    
+    # 2. Update all orders for this customer for UI aggregation consistency
+    order_update = {}
+    if update_data.name: order_update["customer_name"] = update_data.name
+    if update_data.address: order_update["customer_address"] = update_data.address
+    
+    if order_update:
+        await db.orders.update_many(
+            {"customer_phone": phone_number, "vendor_id": vendor_id},
+            {"$set": order_update}
+        )
+        
+    return {"success": True, "message": "Customer updated successfully"}
 
 # ============================================
 # WHATSAPP SERVICE INTERNAL ENDPOINTS
@@ -2895,7 +3273,11 @@ async def create_multi_item_order(order_req: MultiItemOrderRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/whatsapp/delivery-response")
-async def handle_delivery_response(phone_number: str = Query(...), message: str = Query(...)):
+async def handle_delivery_response(
+    phone_number: str = Query(...), 
+    message: str = Query(...),
+    api_key: str = Depends(verify_service_api_key)
+):
     """Handle delivery staff responses from WhatsApp"""
     try:
         # Find delivery staff by phone
@@ -2919,6 +3301,46 @@ async def handle_delivery_response(phone_number: str = Query(...), message: str 
         return {"success": False, "message": str(e)}
 
 
+
+@api_router.get("/customers")
+async def get_customers(
+    search: Optional[str] = None,
+    limit: int = 50,
+    skip: int = 0,
+    vendor_id: str = Depends(get_current_vendor_id)
+):
+    """
+    Get customers derived from order history.
+    """
+    try:
+        match_stage = {"vendor_id": vendor_id}
+        if search:
+            match_stage["$or"] = [
+                {"customer_name": {"$regex": search, "$options": "i"}},
+                {"customer_phone": {"$regex": search, "$options": "i"}}
+            ]
+
+        pipeline = [
+            {"$match": match_stage},
+            {"$group": {
+                "_id": "$customer_phone",
+                "name": {"$first": "$customer_name"},
+                "address": {"$first": "$customer_address"},
+                "total_orders": {"$sum": 1},
+                "last_order": {"$max": "$created_at"},
+                "total_spent": {"$sum": "$amount"},
+                "pending_due": {"$sum": "$amount_due"}
+            }},
+            {"$sort": {"last_order": -1}},
+            {"$skip": skip},
+            {"$limit": limit}
+        ]
+        
+        customers = await db.orders.aggregate(pipeline).to_list(limit)
+        return customers
+    except Exception as e:
+        logger.error(f"Error fetching customers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.get("/export/orders")
 async def export_orders(

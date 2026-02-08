@@ -1,6 +1,6 @@
 import React from 'react';
 import { useLocation, Link } from 'react-router-dom';
-import { Package, TruckIcon, Droplets, Settings, Users } from 'lucide-react';
+import { Package, TruckIcon, Droplets, Settings, Users, UserCheck } from 'lucide-react';
 
 const MobileNav = () => {
     const location = useLocation();
@@ -8,9 +8,10 @@ const MobileNav = () => {
     const navItems = [
         { path: '/', icon: Package, label: 'Home' },
         { path: '/orders', icon: TruckIcon, label: 'Orders' },
-        { path: '/delivery', icon: Users, label: 'Staff' },
+        { path: '/customers', icon: Users, label: 'Cust.' },
+        { path: '/delivery', icon: UserCheck, label: 'Staff' },
         { path: '/stock', icon: Droplets, label: 'Stock' },
-        { path: '/settings', icon: Settings, label: 'Config' },
+        { path: '/settings', icon: Settings, label: 'Cfg' },
     ];
 
     return (

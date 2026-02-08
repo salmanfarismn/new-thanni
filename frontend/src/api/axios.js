@@ -76,6 +76,8 @@ export const getAuthToken = () => {
 export const removeAuthToken = () => {
     localStorage.removeItem('access_token');
     localStorage.removeItem('vendor');
+    localStorage.removeItem('company_name');
+    localStorage.removeItem('logo_url');
 };
 
 export const isAuthenticated = () => {

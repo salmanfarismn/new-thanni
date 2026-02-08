@@ -51,6 +51,8 @@ export default function Orders() {
       setFilter('upi-pending');
     } else if (paymentParam === 'cash_due') {
       setFilter('cash-due');
+    } else if (paymentParam === 'unpaid') {
+      setFilter('unpaid');
     }
   }, []);
 
@@ -92,11 +94,12 @@ export default function Orders() {
     }
   };
 
-  const updateOrderStatus = async (orderId, status, paymentStatus = null, paymentMethod = null) => {
+  const updateOrderStatus = async (orderId, status, paymentStatus = null, paymentMethod = null, emptyCans = null) => {
     try {
       const payload = { order_id: orderId, status };
       if (paymentStatus) payload.payment_status = paymentStatus;
       if (paymentMethod) payload.payment_method = paymentMethod;
+      if (emptyCans !== null) payload.empty_cans_collected = emptyCans;
 
       await api.put(`/orders/${orderId}/status`, payload);
       toast.success(`Order ${status}!`);
@@ -322,28 +325,7 @@ export default function Orders() {
         </div>
       )}
 
-      {/* Mobile Filter Bar */}
-      <div className="lg:hidden flex overflow-x-auto pb-2 gap-2 no-scrollbar -mx-4 px-4 sticky top-0 bg-white/80 backdrop-blur-md z-10 py-2">
-        {[
-          { id: 'all', label: 'All', icon: Package },
-          { id: 'pending', label: 'Pending', icon: Clock },
-          { id: 'delivered', label: 'Done', icon: CheckCircle },
-          { id: 'unpaid', label: 'Unpaid', icon: AlertCircle },
-          { id: 'paid', label: 'Paid', icon: CheckCircle }
-        ].map((item) => (
-          <button
-            key={item.id}
-            onClick={() => setFilter(item.id)}
-            className={`flex-shrink-0 flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all border ${filter === item.id
-              ? 'bg-slate-900 text-white border-slate-900 shadow-md'
-              : 'bg-white text-slate-500 border-slate-200'
-              }`}
-          >
-            <item.icon size={14} className={filter === item.id ? 'text-white' : 'text-slate-400'} />
-            {item.label}
-          </button>
-        ))}
-      </div>
+
 
       <div className="flex flex-col lg:flex-row gap-6 lg:gap-10">
 
@@ -367,7 +349,10 @@ export default function Orders() {
                     }`}
                 >
                   <div className="flex items-center gap-3">
-                    <item.icon size={18} strokeWidth={filter === item.id ? 3 : 2} className={filter === item.id ? 'text-sky-500' : 'text-slate-400 group-hover:text-slate-600'} />
+                    {(() => {
+                      const Icon = item.icon;
+                      return <Icon size={18} strokeWidth={filter === item.id ? 3 : 2} className={filter === item.id ? 'text-sky-500' : 'text-slate-400 group-hover:text-slate-600'} />;
+                    })()}
                     {item.label}
                   </div>
                   {filter === item.id && <div className="w-1.5 h-1.5 rounded-full bg-sky-500 shadow-[0_0_8px_rgba(14,165,233,0.5)]"></div>}
@@ -398,7 +383,10 @@ export default function Orders() {
                     } : {}}
                   >
                     <div className="flex items-center gap-3">
-                      <item.icon size={16} strokeWidth={filter === item.id ? 3 : 2} />
+                      {(() => {
+                        const Icon = item.icon;
+                        return <Icon size={16} strokeWidth={filter === item.id ? 3 : 2} />;
+                      })()}
                       {item.label}
                     </div>
                     {filter === item.id && <div className="w-1.5 h-1.5 rounded-full" style={{
@@ -422,23 +410,56 @@ export default function Orders() {
         {/* Right Side Main Content */}
         <div className="flex-1 space-y-8">
 
+          {/* Mobile Filters */}
+          <div className="lg:hidden flex overflow-x-auto gap-2 pb-2 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
+            {[
+              { id: 'all', label: 'All', icon: Package },
+              { id: 'pending', label: 'Pending', icon: Clock },
+              { id: 'delivered', label: 'Delivered', icon: CheckCircle },
+              { id: 'unpaid', label: 'Unpaid', icon: AlertCircle, color: 'red-500' },
+              { id: 'upi-pending', label: 'UPI Wait', icon: CreditCard, color: 'purple-500' },
+              { id: 'cash-due', label: 'Cash Due', icon: Wallet, color: 'orange-500' },
+            ].map((item) => (
+              <button
+                key={item.id}
+                onClick={() => setFilter(item.id)}
+                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black whitespace-nowrap transition-all border ${filter === item.id
+                  ? 'bg-slate-900 text-white border-slate-900 shadow-lg shadow-slate-900/20'
+                  : 'bg-white text-slate-500 border-slate-200'
+                  }`}
+              >
+                {(() => {
+                  const Icon = item.icon;
+                  return <Icon size={14} className={filter === item.id ? 'text-white' : (item.color ? `text-${item.color}` : 'text-slate-400')} />;
+                })()}
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+
           {/* Collection Dashboard Summary (Contextual) */}
           {['pending-payment', 'upi-pending', 'cash-due', 'unpaid'].includes(filter) && (
-            <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-[32px] sm:rounded-[40px] p-6 sm:p-10 text-white shadow-2xl shadow-amber-500/20 relative overflow-hidden animate-in slide-in-from-top-4 duration-500">
+            <div className="bg-gradient-to-br from-amber-500 to-orange-600 rounded-[24px] sm:rounded-[40px] p-5 sm:p-10 text-white shadow-xl shadow-amber-500/20 relative overflow-hidden animate-in slide-in-from-top-4 duration-500">
               <div className="absolute top-0 right-0 w-64 h-64 bg-white/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2"></div>
-              <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-8">
-                <div className="text-center md:text-left">
-                  <div className="flex items-center justify-center md:justify-start gap-2 mb-4">
-                    <div className="p-2 bg-white/20 backdrop-blur-xl rounded-xl border border-white/20 shadow-lg"><IndianRupee size={20} /></div>
-                    <span className="text-xs font-black uppercase tracking-[0.2em] opacity-80">Collection Dashboard</span>
+              <div className="relative z-10 flex flex-col md:flex-row items-center justify-between gap-6 sm:gap-8">
+                <div className="text-center md:text-left w-full sm:w-auto">
+                  <div className="flex items-center justify-center md:justify-start gap-2 mb-2 sm:mb-4">
+                    <div className="p-1.5 sm:p-2 bg-white/20 backdrop-blur-xl rounded-xl border border-white/20 shadow-lg"><IndianRupee size={16} className="sm:w-5 sm:h-5" /></div>
+                    <span className="text-[10px] sm:text-xs font-black uppercase tracking-[0.2em] opacity-80">Collection Dashboard</span>
                   </div>
-                  <div className="text-5xl sm:text-7xl font-black tracking-tighter mb-2 drop-shadow-sm">₹{filteredOrders.reduce((sum, o) => sum + (o.amount || 0), 0).toLocaleString()}</div>
-                  <p className="text-amber-100 font-medium text-lg">Pending collection across {filteredOrders.length} accounts</p>
+                  <div className="text-4xl sm:text-5xl md:text-7xl font-black tracking-tighter mb-2 drop-shadow-sm">₹{filteredOrders.reduce((sum, o) => sum + (o.amount || 0), 0).toLocaleString()}</div>
+                  <p className="text-amber-100 font-medium text-xs sm:text-lg">Pending collection across {filteredOrders.length} accounts</p>
                 </div>
-                <div className="flex flex-shrink-0 gap-4">
-                  <div className="px-8 py-6 bg-amber-950/20 backdrop-blur-md rounded-3xl border border-white/10 text-center shadow-inner">
-                    <div className="text-[10px] font-black uppercase opacity-60 mb-1">Total Accounts</div>
-                    <div className="text-4xl font-black">{filteredOrders.length}</div>
+
+                {/* Mobile Stats Grid inside Card */}
+                <div className="grid grid-cols-2 gap-2 sm:gap-4 w-full md:w-auto">
+                  <div className="px-4 py-3 sm:px-8 sm:py-6 bg-amber-950/20 backdrop-blur-md rounded-2xl sm:rounded-3xl border border-white/10 text-center shadow-inner">
+                    <div className="text-[10px] font-black uppercase opacity-60 mb-0.5 sm:mb-1">Total Orders</div>
+                    <div className="text-xl sm:text-4xl font-black">{filteredOrders.length}</div>
+                  </div>
+                  <div className="px-4 py-3 sm:px-8 sm:py-6 bg-amber-950/20 backdrop-blur-md rounded-2xl sm:rounded-3xl border border-white/10 text-center shadow-inner">
+                    <div className="text-[10px] font-black uppercase opacity-60 mb-0.5 sm:mb-1">Cans</div>
+                    <div className="text-xl sm:text-4xl font-black">{filteredOrders.reduce((sum, o) => sum + (o.quantity || 0), 0)}</div>
                   </div>
                 </div>
               </div>
@@ -648,19 +669,52 @@ export default function Orders() {
               {/* Fixed Actions Footer */}
               <div className="p-4 bg-white border-t border-slate-50 flex-shrink-0 z-20">
                 {selectedOrder.status === 'pending' && (
-                  <div className="space-y-3">
+                  <div className="space-y-4">
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] text-center">Complete Order</p>
+
+                    {/* Empty Cans Collected Input */}
+                    <div className="bg-slate-50 p-3 sm:p-4 rounded-2xl border border-slate-100 space-y-3">
+                      <div className="flex flex-col gap-1">
+                        <div className="flex justify-between items-center">
+                          <label className="text-[10px] sm:text-xs font-black text-slate-500 uppercase tracking-wider">Empty Cans Collected</label>
+                          <span className="text-[10px] font-bold text-sky-600 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-100">Default: {selectedOrder.quantity}</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 font-medium italic">* To be handled by Delivery App in future</p>
+                      </div>
+
+                      <div className="flex items-center gap-3 bg-white p-1 rounded-xl border border-slate-200">
+                        <button
+                          onClick={() => setSelectedOrder(prev => ({ ...prev, empty_cans: Math.max(0, (prev.empty_cans ?? prev.quantity) - 1) }))}
+                          className="w-12 h-10 rounded-lg bg-slate-50 text-slate-500 hover:bg-slate-100 border-r border-slate-100 flex items-center justify-center active:bg-slate-200 transition-colors"
+                        >
+                          <Minus size={18} strokeWidth={3} />
+                        </button>
+                        <input
+                          type="number"
+                          value={selectedOrder.empty_cans ?? selectedOrder.quantity}
+                          onChange={(e) => setSelectedOrder(prev => ({ ...prev, empty_cans: Math.max(0, parseInt(e.target.value) || 0) }))}
+                          className="flex-1 text-center font-black text-xl bg-transparent border-none focus:ring-0 p-0 text-slate-900 placeholder:text-slate-300"
+                        />
+                        <button
+                          onClick={() => setSelectedOrder(prev => ({ ...prev, empty_cans: (prev.empty_cans ?? prev.quantity) + 1 }))}
+                          className="w-12 h-10 rounded-lg bg-slate-900 text-white hover:bg-slate-800 flex items-center justify-center active:scale-95 transition-transform shadow-sm"
+                        >
+                          <Plus size={18} strokeWidth={3} />
+                        </button>
+                      </div>
+                    </div>
+
                     <div className="grid grid-cols-2 gap-3">
-                      <Button variant="primary" className="bg-emerald-500 hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_cash', 'cash')}>
+                      <Button variant="primary" className="bg-emerald-500 hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_cash', 'cash', selectedOrder.empty_cans ?? selectedOrder.quantity)}>
                         <span className="text-xs font-medium opacity-90">Payment: Cash</span>
                         <span className="text-sm font-black">Delivered</span>
                       </Button>
-                      <Button variant="accent" className="bg-sky-500 hover:bg-sky-600 shadow-lg shadow-sky-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_upi', 'upi')}>
+                      <Button variant="accent" className="bg-sky-500 hover:bg-sky-600 shadow-lg shadow-sky-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_upi', 'upi', selectedOrder.empty_cans ?? selectedOrder.quantity)}>
                         <span className="text-xs font-medium opacity-90">Payment: UPI</span>
                         <span className="text-sm font-black">Delivered</span>
                       </Button>
                     </div>
-                    <Button variant="secondary" className="w-full rounded-xl h-12 font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'delivered_unpaid')}>
+                    <Button variant="secondary" className="w-full rounded-xl h-12 font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'delivered_unpaid', null, selectedOrder.empty_cans ?? selectedOrder.quantity)}>
                       Mark Delivered Only (Unpaid)
                     </Button>
                   </div>
@@ -814,6 +868,6 @@ export default function Orders() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+    </div >
   );
 }

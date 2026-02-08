@@ -21,3 +21,28 @@
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+# WhatsApp Auth (Do NOT commit)
+whatsapp-service/auth_info_*/
+
+# Logs
+*.log
+
+# Python
+.venv/
+__pycache__/
+
+# Temp / Static
+backend/static/
+# WhatsApp sessions
+whatsapp-service/auth_info_*/
+whatsapp-service/*.log
+
+# Reports
+*_report.txt
+*_output.txt
+
+# Backend static
+backend/static/
+
+# Env
+.env

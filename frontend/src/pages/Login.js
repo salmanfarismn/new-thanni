@@ -5,11 +5,13 @@
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import api, { setAuthToken, setVendor, removeAuthToken } from '../api/axios';
+import api, { setAuthToken, removeAuthToken } from '../api/axios';
+import { useCompanyName } from '../context/AppContext';
 import { Droplets, Phone, Lock, Eye, EyeOff, Loader2, ArrowRight, AlertTriangle, ShieldCheck } from 'lucide-react';
 
 export default function Login() {
     const navigate = useNavigate();
+    const { setVendor, refreshCompanyName } = useCompanyName();
     const [formData, setFormData] = useState({ phone: '', pin: '' });
     const [showPin, setShowPin] = useState(false);
     const [loading, setLoading] = useState(false);
@@ -45,6 +47,7 @@ export default function Login() {
 
             setAuthToken(response.data.access_token);
             setVendor(response.data.vendor);
+            await refreshCompanyName(); // Fetch specific branding for this vendor immediately
             toast.success(`Welcome back, ${response.data.vendor.name || response.data.vendor.business_name}!`);
             navigate('/');
         } catch (err) {

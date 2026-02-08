@@ -33,7 +33,7 @@ def main():
     print()
     
     services = [
-        ("Backend API", "http://localhost:5000/api/orders"),
+        ("Backend API", "http://localhost:8000/api/health"),
         ("Frontend", "http://localhost:3000"),
         ("WhatsApp Service", "http://localhost:3001/status"),
     ]
