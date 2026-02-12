@@ -1,22 +1,24 @@
 /**
  * Login Page for Thanni Canuuu
  * 2025 Design Update: Split layout, Glassmorphism, Premium Water Theme
+ * Supports both Vendor and Delivery Agent login
  */
 import { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { toast } from 'sonner';
-import api, { setAuthToken, removeAuthToken } from '../api/axios';
+import api, { setAuthToken, removeAuthToken, setUserRole } from '../api/axios';
 import { useCompanyName } from '../context/AppContext';
-import { Droplets, Phone, Lock, Eye, EyeOff, Loader2, ArrowRight, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { Droplets, Phone, Lock, Eye, EyeOff, Loader2, ArrowRight, AlertTriangle, ShieldCheck, Truck, Store } from 'lucide-react';
 
 export default function Login() {
     const navigate = useNavigate();
-    const { setVendor, refreshCompanyName } = useCompanyName();
+    const { setVendor, refreshCompanyName, setUserRole: setContextRole } = useCompanyName();
     const [formData, setFormData] = useState({ phone: '', pin: '' });
     const [showPin, setShowPin] = useState(false);
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState('');
     const [focusedField, setFocusedField] = useState(null);
+    const [loginRole, setLoginRole] = useState('vendor'); // 'vendor' or 'delivery_agent'
 
     const handleChange = (e) => {
         const { name, value } = e.target;
@@ -34,22 +36,41 @@ export default function Login() {
         setError('');
 
         // IMPORTANT: Clear any existing auth data before new login
-        // This ensures proper vendor isolation
         removeAuthToken();
 
         try {
             const deviceName = getDeviceName();
-            const response = await api.post('/auth/login', {
-                phone: `+91${formData.phone}`,
-                pin: formData.pin,
-                device_name: deviceName
-            });
 
-            setAuthToken(response.data.access_token);
-            setVendor(response.data.vendor);
-            await refreshCompanyName(); // Fetch specific branding for this vendor immediately
-            toast.success(`Welcome back, ${response.data.vendor.name || response.data.vendor.business_name}!`);
-            navigate('/');
+            if (loginRole === 'delivery_agent') {
+                // Agent login
+                const response = await api.post('/auth/agent/login', {
+                    phone: `+91${formData.phone}`,
+                    pin: formData.pin,
+                    device_name: deviceName
+                });
+
+                setAuthToken(response.data.access_token);
+                setUserRole('delivery_agent');
+                setContextRole('delivery_agent');
+                setVendor(response.data.user);
+                toast.success(`Welcome, ${response.data.user.name}!`);
+                navigate('/agent/dashboard');
+            } else {
+                // Vendor login (original flow)
+                const response = await api.post('/auth/login', {
+                    phone: `+91${formData.phone}`,
+                    pin: formData.pin,
+                    device_name: deviceName
+                });
+
+                setAuthToken(response.data.access_token);
+                setUserRole('vendor');
+                setContextRole('vendor');
+                setVendor(response.data.vendor);
+                await refreshCompanyName();
+                toast.success(`Welcome back, ${response.data.vendor.name || response.data.vendor.business_name}!`);
+                navigate('/');
+            }
         } catch (err) {
             console.error('Login error:', err);
             setError(err.response?.data?.detail || 'Login failed. Please verify your credentials.');
@@ -93,10 +114,17 @@ export default function Login() {
 
                     <div className="space-y-6 max-w-lg">
                         <h1 className="text-5xl font-black leading-tight tracking-tight">
-                            Manage your <span className="text-blue-400">water delivery</span> business with confidence.
+                            {loginRole === 'delivery_agent' ? (
+                                <>Deliver with <span className="text-blue-400">confidence</span>, track every order.</>
+                            ) : (
+                                <>Manage your <span className="text-blue-400">water delivery</span> business with confidence.</>
+                            )}
                         </h1>
                         <p className="text-slate-400 text-lg leading-relaxed">
-                            Track orders, manage inventory, and secure your vendor account with our improved, multi-device platform.
+                            {loginRole === 'delivery_agent'
+                                ? 'Access your delivery queue, complete orders, and report issues — all in one place.'
+                                : 'Track orders, manage inventory, and secure your vendor account with our improved, multi-device platform.'
+                            }
                         </p>
                     </div>
 
@@ -123,8 +151,41 @@ export default function Login() {
                         <div className="lg:hidden inline-flex items-center justify-center w-36 h-36 rounded-2xl mb-8 overflow-hidden">
                             <img src="/logo.png" alt="Logo" className="w-full h-full object-contain drop-shadow-2xl" />
                         </div>
-                        <h2 className="text-3xl font-black text-slate-900 tracking-tight">Welcome back</h2>
-                        <p className="mt-2 text-slate-500">Please enter your details to sign in.</p>
+                        <h2 className="text-3xl font-black text-slate-900 tracking-tight">
+                            {loginRole === 'delivery_agent' ? 'Agent Login' : 'Welcome back'}
+                        </h2>
+                        <p className="mt-2 text-slate-500">
+                            {loginRole === 'delivery_agent'
+                                ? 'Sign in with your agent credentials.'
+                                : 'Please enter your details to sign in.'
+                            }
+                        </p>
+                    </div>
+
+                    {/* Role Toggle */}
+                    <div className="flex bg-slate-100 rounded-2xl p-1 gap-1">
+                        <button
+                            type="button"
+                            onClick={() => { setLoginRole('vendor'); setError(''); }}
+                            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all duration-200 ${loginRole === 'vendor'
+                                    ? 'bg-white text-slate-900 shadow-sm'
+                                    : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                        >
+                            <Store className="w-4 h-4" />
+                            Vendor
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => { setLoginRole('delivery_agent'); setError(''); }}
+                            className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all duration-200 ${loginRole === 'delivery_agent'
+                                    ? 'bg-white text-slate-900 shadow-sm'
+                                    : 'text-slate-400 hover:text-slate-600'
+                                }`}
+                        >
+                            <Truck className="w-4 h-4" />
+                            Agent
+                        </button>
                     </div>
 
                     <form onSubmit={handleSubmit} className="space-y-6">
@@ -175,9 +236,11 @@ export default function Login() {
                                     <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">
                                         PIN Code
                                     </label>
-                                    <Link to="/forgot-pin" className="text-xs font-bold text-blue-600 hover:text-blue-700">
-                                        Forgot PIN?
-                                    </Link>
+                                    {loginRole === 'vendor' && (
+                                        <Link to="/forgot-pin" className="text-xs font-bold text-blue-600 hover:text-blue-700">
+                                            Forgot PIN?
+                                        </Link>
+                                    )}
                                 </div>
                                 <div className={`relative flex items-center h-14 w-full rounded-2xl border-2 transition-all duration-200 bg-white ${focusedField === 'pin'
                                     ? 'border-blue-500 ring-4 ring-blue-500/10'
@@ -213,25 +276,36 @@ export default function Login() {
                         <button
                             type="submit"
                             disabled={loading}
-                            className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-2xl shadow-xl shadow-slate-900/20 hover:shadow-2xl hover:shadow-slate-900/30 transition-all active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-3 text-lg"
+                            className={`w-full h-14 font-bold rounded-2xl shadow-xl transition-all active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-3 text-lg ${loginRole === 'delivery_agent'
+                                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20 hover:shadow-emerald-600/30'
+                                    : 'bg-slate-900 hover:bg-slate-800 text-white shadow-slate-900/20 hover:shadow-2xl hover:shadow-slate-900/30'
+                                }`}
                         >
                             {loading ? (
                                 <Loader2 className="w-5 h-5 animate-spin" />
                             ) : (
                                 <>
-                                    <span>Log in</span>
+                                    <span>{loginRole === 'delivery_agent' ? 'Sign in as Agent' : 'Log in'}</span>
                                     <ArrowRight className="w-5 h-5 opacity-60" />
                                 </>
                             )}
                         </button>
                     </form>
 
-                    <p className="text-center text-slate-500 font-medium">
-                        Don't have an account?{' '}
-                        <Link to="/register" className="text-blue-600 font-bold hover:underline">
-                            Register now
-                        </Link>
-                    </p>
+                    {loginRole === 'vendor' && (
+                        <p className="text-center text-slate-500 font-medium">
+                            Don't have an account?{' '}
+                            <Link to="/register" className="text-blue-600 font-bold hover:underline">
+                                Register now
+                            </Link>
+                        </p>
+                    )}
+
+                    {loginRole === 'delivery_agent' && (
+                        <p className="text-center text-slate-400 text-sm">
+                            Contact your vendor if you don't have login credentials.
+                        </p>
+                    )}
                 </div>
 
                 {/* Footer for Mobile */}

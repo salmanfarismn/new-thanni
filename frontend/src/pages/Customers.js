@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../context/AppContext';
-import { Users, Search, PhoneCall, MessageCircle, MapPin, Clock, IndianRupee, AlertCircle } from 'lucide-react';
+import { Users, Search, PhoneCall, MessageCircle, MapPin, Clock, IndianRupee, AlertCircle, Navigation } from 'lucide-react';
 import { toast } from 'sonner';
 import Card from '../components/ui/card';
 import Badge from '../components/ui/badge';
@@ -134,10 +134,16 @@ export default function Customers() {
                                     <PhoneCall size={14} /> {customer._id}
                                 </div>
 
-                                <div className="flex items-start gap-2 text-sm text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100 mb-4 min-h-[60px]">
+                                <a
+                                    href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(customer.address)}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="flex items-start gap-2 text-sm text-slate-600 bg-slate-50 p-3 rounded-xl border border-slate-100 mb-4 min-h-[60px] hover:bg-slate-100 transition-colors group/addr"
+                                >
                                     <MapPin size={16} className="mt-0.5 text-slate-400 flex-shrink-0" />
-                                    <span className="line-clamp-2">{customer.address || "Address not provided"}</span>
-                                </div>
+                                    <span className="line-clamp-2 flex-1">{customer.address || "Address not provided"}</span>
+                                    <span className="text-[10px] font-bold text-blue-500 uppercase tracking-wider opacity-0 group-hover/addr:opacity-100 transition-opacity">Map</span>
+                                </a>
 
                                 <div className="grid grid-cols-2 gap-3 text-center">
                                     <div className="bg-slate-50 rounded-xl p-2 border border-slate-100">
@@ -154,7 +160,7 @@ export default function Customers() {
                             </div>
 
                             {/* Actions Footer */}
-                            <div className="grid grid-cols-2 border-t border-slate-100 divide-x divide-slate-100">
+                            <div className="grid grid-cols-3 border-t border-slate-100 divide-x divide-slate-100">
                                 <a
                                     href={`tel:${customer._id}`}
                                     className="flex items-center justify-center gap-2 py-3 text-slate-600 font-bold text-sm hover:bg-slate-50 transition-colors"
@@ -168,6 +174,14 @@ export default function Customers() {
                                     className="flex items-center justify-center gap-2 py-3 text-emerald-600 font-bold text-sm hover:bg-emerald-50 transition-colors"
                                 >
                                     <MessageCircle size={16} /> Chat
+                                </a>
+                                <a
+                                    href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(customer.address)}`}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="flex items-center justify-center gap-2 py-3 text-blue-600 font-bold text-sm hover:bg-blue-50 transition-colors"
+                                >
+                                    <Navigation size={16} /> Map
                                 </a>
                             </div>
                         </Card>

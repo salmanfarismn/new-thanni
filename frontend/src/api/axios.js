@@ -5,7 +5,7 @@
 import axios from 'axios';
 
 // API base URL - uses environment variable or defaults to localhost
-const API_BASE_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+export const API_BASE_URL = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
 
 // Create axios instance
 const api = axios.create({
@@ -50,6 +50,7 @@ api.interceptors.response.use(
             // Clear auth data
             localStorage.removeItem('access_token');
             localStorage.removeItem('vendor');
+            localStorage.removeItem('user_role');
 
             // Redirect to login (only if not already on login page)
             if (window.location.pathname !== '/login') {
@@ -78,11 +79,20 @@ export const removeAuthToken = () => {
     localStorage.removeItem('vendor');
     localStorage.removeItem('company_name');
     localStorage.removeItem('logo_url');
+    localStorage.removeItem('user_role');
 };
 
 export const isAuthenticated = () => {
     const token = getAuthToken();
     return !!token;
+};
+
+export const getUserRole = () => {
+    return localStorage.getItem('user_role') || 'vendor';
+};
+
+export const setUserRole = (role) => {
+    localStorage.setItem('user_role', role);
 };
 
 export const getVendor = () => {

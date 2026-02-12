@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
-import { api } from '../context/AppContext';
-import { Plus, Minus, Archive, RefreshCw, AlertCircle, AlertTriangle, X, Trash2, Check, Camera, Hash, CheckCircle2, Droplets, Zap, AlertOctagon, Undo2, Truck, FileText } from 'lucide-react';
+import { api, API_BASE_URL } from '../context/AppContext';
+import { Plus, Minus, Archive, RefreshCw, AlertCircle, AlertTriangle, X, Trash2, Check, Camera, Hash, CheckCircle2, Droplets, Zap, AlertOctagon, Undo2, Truck, FileText, User, Eye, Clock } from 'lucide-react';
 import { toast } from 'sonner';
 import Card from '../components/ui/card';
 import Button from '../components/ui/button';
@@ -23,6 +23,7 @@ export default function Stock() {
   const [mode, setMode] = useState('add'); // 'add', 'reduce', 'damage'
   const [quantity, setQuantity] = useState(0);
   const [updating, setUpdating] = useState(false);
+  const [dateFilter, setDateFilter] = useState('7'); // 'today', '7', '30'
 
   // Damage dialog state
   const [isDamageDialogOpen, setIsDamageDialogOpen] = useState(false);
@@ -36,12 +37,15 @@ export default function Stock() {
   });
   const [todayDamage, setTodayDamage] = useState(null);
   const [salesData, setSalesData] = useState(null);
+  const [agentReports, setAgentReports] = useState([]);
+  const [selectedPhoto, setSelectedPhoto] = useState(null);
 
   useEffect(() => {
     loadStock();
     loadTodayDamage();
     loadSalesData();
-  }, []);
+    loadAgentReports();
+  }, [dateFilter]); // Reload when filter changes
 
   const loadStock = async () => {
     try {
@@ -67,10 +71,21 @@ export default function Stock() {
 
   const loadSalesData = async () => {
     try {
-      const response = await api.get('/dashboard/sales?period=today');
+      const periodMap = { 'today': 'today', '7': 'week', '30': 'month' };
+      const response = await api.get(`/dashboard/sales?period=${periodMap[dateFilter] || 'today'}`);
       setSalesData(response.data);
     } catch (error) {
       console.error("Error loading sales data:", error);
+    }
+  };
+
+  const loadAgentReports = async () => {
+    try {
+      const days = dateFilter === 'today' ? 1 : parseInt(dateFilter);
+      const response = await api.get(`/damage-reports?days=${days}`);
+      setAgentReports(response.data.reports || []);
+    } catch (error) {
+      console.error('Error loading agent reports:', error);
     }
   };
 
@@ -159,6 +174,24 @@ export default function Stock() {
           <p className="text-slate-500 font-medium text-sm">Real-time inventory control</p>
         </div>
         <div className="flex items-center gap-3">
+          {/* Date Filter */}
+          <div className="flex bg-slate-100 p-1 rounded-xl">
+            {[
+              { id: 'today', label: 'Today' },
+              { id: '7', label: '7 Days' },
+              { id: '30', label: '30 Days' }
+            ].map((f) => (
+              <button
+                key={f.id}
+                onClick={() => setDateFilter(f.id)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${dateFilter === f.id ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-500 hover:text-slate-700'
+                  }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+
           {/* Report Damage Button - Desktop */}
           <Button
             onClick={() => setIsDamageDialogOpen(true)}
@@ -169,7 +202,7 @@ export default function Stock() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => { loadStock(); loadTodayDamage(); }}
+            onClick={() => { loadStock(); loadTodayDamage(); loadAgentReports(); }}
             className="h-10 w-10 rounded-full p-0 flex items-center justify-center border-slate-200 bg-white shadow-sm active:scale-90 transition-all"
           >
             <RefreshCw size={18} className={`${loading ? 'animate-spin' : ''} text-slate-600`} />
@@ -384,6 +417,115 @@ export default function Stock() {
           </Card>
         </div>
       </div>
+
+      {/* Agent Reports Feed */}
+      {agentReports.length > 0 && (
+        <div className="bg-white border border-slate-100 rounded-3xl shadow-sm overflow-hidden">
+          <div className="p-5 border-b border-slate-50 flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-violet-50 text-violet-600 rounded-xl">
+                <Camera size={18} />
+              </div>
+              <div>
+                <h4 className="font-bold text-slate-900">Agent Reports</h4>
+                <p className="text-slate-400 text-xs font-medium">Last {dateFilter === 'today' ? '24 hours' : `${dateFilter} days`} · {agentReports.length} reports</p>
+              </div>
+            </div>
+            <button onClick={loadAgentReports} className="p-2 hover:bg-slate-50 rounded-xl transition-colors">
+              <RefreshCw size={14} className="text-slate-400" />
+            </button>
+          </div>
+          <div className="divide-y divide-slate-50">
+            {agentReports.slice(0, 10).map((report) => {
+              const reasonObj = DAMAGE_REASONS.find(r => r.id === report.reason);
+              const Icon = reasonObj?.icon || AlertCircle;
+              const timeAgo = (() => {
+                if (!report.created_at) return '';
+                const d = new Date(report.created_at);
+                const now = new Date();
+                const diffMs = now - d;
+                const hours = Math.floor(diffMs / 3600000);
+                if (hours < 1) return 'Just now';
+                if (hours < 24) return `${hours}h ago`;
+                const days = Math.floor(hours / 24);
+                return `${days}d ago`;
+              })();
+              return (
+                <div key={report.report_id} className="p-4 flex items-start gap-3 hover:bg-slate-25 transition-colors">
+                  {/* Photo Thumbnail */}
+                  {report.photo_url ? (
+                    <button
+                      onClick={() => setSelectedPhoto(`${API_BASE_URL}${report.photo_url}`)}
+                      className="w-14 h-14 rounded-xl overflow-hidden border-2 border-slate-100 flex-shrink-0 hover:border-violet-300 transition-colors relative group"
+                    >
+                      <img
+                        src={`${API_BASE_URL}${report.photo_url}`}
+                        alt="Damage"
+                        className="w-full h-full object-cover"
+                        onError={(e) => { e.target.style.display = 'none'; }}
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/20 transition-colors flex items-center justify-center">
+                        <Eye size={14} className="text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                      </div>
+                    </button>
+                  ) : (
+                    <div className="w-14 h-14 rounded-xl bg-slate-50 border-2 border-slate-100 flex items-center justify-center flex-shrink-0">
+                      <Camera size={18} className="text-slate-300" />
+                    </div>
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <div className={`p-1 rounded-md ${reasonObj?.bg || 'bg-slate-50'} ${reasonObj?.color || 'text-slate-500'}`}>
+                        <Icon size={12} />
+                      </div>
+                      <span className="font-bold text-slate-900 text-sm truncate">{reasonObj?.label || report.reason}</span>
+                    </div>
+                    <div className="flex items-center gap-2 mt-1">
+                      <User size={10} className="text-slate-400" />
+                      <span className="text-xs text-slate-500 font-medium">{report.agent_name}</span>
+                      <span className="text-slate-200">·</span>
+                      <span className="text-red-500 text-xs font-bold">{report.damaged_qty} dmg</span>
+                      {report.returned_qty > 0 && (
+                        <>
+                          <span className="text-slate-200">·</span>
+                          <span className="text-blue-500 text-xs font-bold">{report.returned_qty} ret</span>
+                        </>
+                      )}
+                    </div>
+                    {report.notes && (
+                      <p className="text-[11px] text-slate-400 mt-1 truncate">{report.notes}</p>
+                    )}
+                  </div>
+                  <span className="text-[10px] text-slate-300 font-medium flex items-center gap-1 flex-shrink-0">
+                    <Clock size={10} />{timeAgo}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Photo Lightbox */}
+      {selectedPhoto && (
+        <div
+          className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+          onClick={() => setSelectedPhoto(null)}
+        >
+          <button
+            onClick={() => setSelectedPhoto(null)}
+            className="absolute top-4 right-4 w-10 h-10 bg-white/10 backdrop-blur-sm rounded-full flex items-center justify-center text-white hover:bg-white/20 transition-colors"
+          >
+            <X size={20} />
+          </button>
+          <img
+            src={selectedPhoto}
+            alt="Damage report"
+            className="max-w-full max-h-[80vh] rounded-2xl shadow-2xl object-contain"
+            onClick={(e) => e.stopPropagation()}
+          />
+        </div>
+      )}
 
       {/* Report Damage Dialog */}
       <Dialog open={isDamageDialogOpen} onOpenChange={setIsDamageDialogOpen}>

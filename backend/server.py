@@ -1,6 +1,7 @@
 from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header, UploadFile, File
 import shutil
 from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 from motor.motor_asyncio import AsyncIOMotorClient
@@ -154,6 +155,12 @@ async def lifespan(app: FastAPI):
 app = FastAPI(lifespan=lifespan)
 api_router = APIRouter(prefix="/api")
 
+# Mount static files for uploaded photos
+import os as _os
+_static_dir = Path(__file__).parent / "static"
+_static_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
+
 @api_router.get("/health")
 async def health_check():
     return {"status": "ok", "service": "backend"}
@@ -249,6 +256,7 @@ class DeliveryStaff(BaseModel):
     staff_id: str
     name: str
     phone_number: str
+    pin: Optional[str] = Field(default=None, exclude=True, description="Agent login PIN (4-6 digits), will be hashed")
     active_orders_count: int = 0
     is_active: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
@@ -608,7 +616,6 @@ async def send_whatsapp_message(phone_number: str, message: str, vendor_id: Opti
                 json={"to": normalized_phone, "message": message},
                 timeout=10.0
             )
-            return response.json()
             return response.json()
     except Exception as e:
         logging.error(f"Failed to send WhatsApp message: {e}")
@@ -2386,7 +2393,7 @@ async def record_damaged_cans(
         "created_at": datetime.now(timezone.utc).isoformat()
     }
     
-    await db.damage_records.insert_one(damage_record)
+    await db.damage_reports.insert_one(damage_record)
     
     # Deduct from available stock
     await db.stock.update_one(
@@ -2459,7 +2466,7 @@ async def get_damage_history(
         else:
             query["date"] = {"$lte": end_date}
     
-    damage_records = await db.damage_records.find(
+    damage_records = await db.damage_reports.find(
         query, {"_id": 0}
     ).sort("created_at", -1).to_list(100)
     
@@ -2488,7 +2495,7 @@ async def get_today_damage(vendor_id: str = Depends(get_current_vendor_id)):
     """
     today = date.today().isoformat()
     
-    damage_records = await db.damage_records.find(
+    damage_records = await db.damage_reports.find(
         {"vendor_id": vendor_id, "date": today}, {"_id": 0}
     ).to_list(100)
     
@@ -2587,6 +2594,10 @@ async def get_delivery_staff(vendor_id: str = Depends(get_current_vendor_id)):
     SECURITY: Only returns staff belonging to this vendor.
     """
     staff = await db.delivery_staff.find({"vendor_id": vendor_id}, {"_id": 0}).sort("created_at", -1).to_list(100)
+    # Add has_pin flag and strip actual hash for security
+    for s in staff:
+        s['has_pin'] = bool(s.get('pin_hash'))
+        s.pop('pin_hash', None)
     return staff
 
 @api_router.post("/delivery-staff")
@@ -2608,13 +2619,23 @@ async def create_delivery_staff(
     if existing:
         raise HTTPException(status_code=400, detail="Delivery staff with this phone number already exists")
     
-    staff_dict = staff.model_dump()
+    staff_dict = staff.model_dump(exclude={'pin'})
     staff_dict['phone_number'] = phone
     staff_dict['vendor_id'] = vendor_id  # SECURITY: Assigned from JWT token
     staff_dict['created_at'] = datetime.now(timezone.utc).isoformat()
+    staff_dict['role'] = 'delivery_agent'
+    
+    # Hash PIN if provided
+    if staff.pin:
+        from auth import hash_pin
+        if not staff.pin.isdigit() or len(staff.pin) < 4 or len(staff.pin) > 6:
+            raise HTTPException(status_code=400, detail="PIN must be 4-6 digits")
+        staff_dict['pin_hash'] = hash_pin(staff.pin)
+    
     await db.delivery_staff.insert_one(staff_dict)
-    # Remove MongoDB _id to avoid serialization error
+    # Remove MongoDB _id and sensitive fields
     staff_dict.pop('_id', None)
+    staff_dict.pop('pin_hash', None)
     return {"success": True, "message": "Delivery staff added successfully", "staff": staff_dict}
 
 @api_router.put("/delivery-staff/{staff_id}")
@@ -2667,6 +2688,38 @@ async def delete_delivery_staff(
     await db.delivery_shifts.delete_many({"staff_id": staff_id, "vendor_id": vendor_id})
     
     return {"success": True, "message": "Delivery staff deleted successfully"}
+
+
+@api_router.put("/delivery-staff/{staff_id}/reset-pin")
+async def reset_agent_pin(
+    staff_id: str,
+    new_pin: str = Query(..., min_length=4, max_length=6, description="New 4-6 digit PIN"),
+    vendor_id: str = Depends(get_current_vendor_id)
+):
+    """
+    Reset a delivery agent's login PIN.
+    SECURITY: Only the owning vendor can reset their agent's PIN.
+    """
+    from auth import hash_pin
+    
+    if not new_pin.isdigit():
+        raise HTTPException(status_code=400, detail="PIN must contain only digits")
+    
+    # Verify staff belongs to this vendor
+    staff = await db.delivery_staff.find_one({"staff_id": staff_id, "vendor_id": vendor_id})
+    if not staff:
+        raise HTTPException(status_code=404, detail="Delivery staff not found")
+    
+    pin_hash = hash_pin(new_pin)
+    
+    await db.delivery_staff.update_one(
+        {"staff_id": staff_id, "vendor_id": vendor_id},
+        {"$set": {"pin_hash": pin_hash, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    logger.info(f"PIN reset for agent {staff_id} by vendor {vendor_id}")
+    
+    return {"success": True, "message": f"PIN reset successfully for {staff['name']}"}
 
 @api_router.get("/delivery-staff/check/{phone_number}")
 async def check_if_delivery_staff(
@@ -3667,6 +3720,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# ============================================
+# VENDOR: Agent Damage Reports (photos + agent name)
+# ============================================
+
+@api_router.get("/damage-reports")
+async def get_damage_reports(
+    days: int = Query(default=7, ge=1, le=90, description="Number of days"),
+    vendor_id: str = Depends(get_current_vendor_id)
+):
+    """Get damage reports submitted by agents for this vendor."""
+    ist_offset = timedelta(hours=5, minutes=30)
+    cutoff = (datetime.now(timezone.utc) + ist_offset - timedelta(days=days))
+    cutoff_str = cutoff.isoformat()
+
+    reports = await db.damage_reports.find({
+        "vendor_id": vendor_id,
+        "created_at": {"$gte": cutoff_str}
+    }).sort("created_at", -1).to_list(200)
+
+    formatted = []
+    for r in reports:
+        r.pop("_id", None)
+        formatted.append({
+            "report_id": r.get("report_id", ""),
+            "agent_id": r.get("agent_id", ""),
+            "agent_name": r.get("agent_name", "Unknown"),
+            "order_id": r.get("order_id"),
+            "damaged_qty": r.get("damaged_qty", 0),
+            "returned_qty": r.get("returned_qty", 0),
+            "reason": r.get("reason", "other"),
+            "notes": r.get("notes"),
+            "litre_size": r.get("litre_size", 20),
+            "photo_url": r.get("photo_url"),
+            "created_at": r.get("created_at", "")
+        })
+
+    return {
+        "reports": formatted,
+        "total": len(formatted),
+        "period_days": days
+    }
+
 # Include API router
 app.include_router(api_router)
 
@@ -3674,3 +3769,8 @@ app.include_router(api_router)
 from routers.auth import router as auth_router, set_database, get_current_vendor_id
 set_database(db)
 app.include_router(auth_router, prefix="/api")
+
+# Include Agent router
+from routers.agent import router as agent_router, set_database as set_agent_db
+set_agent_db(db)
+app.include_router(agent_router, prefix="/api")

@@ -112,6 +112,7 @@ class LoginResponse(BaseModel):
     token_type: str = "bearer"
     expires_in: int = Field(..., description="Token expiry in seconds")
     vendor: VendorResponse
+    role: Optional[str] = Field(default="vendor", description="User role: vendor or delivery_agent")
 
 
 class MessageResponse(BaseModel):

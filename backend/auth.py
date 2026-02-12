@@ -65,13 +65,21 @@ def verify_pin(plain_pin: str, hashed_pin: str) -> bool:
 # JWT TOKEN FUNCTIONS
 # ============================================
 
-def create_access_token(vendor_id: str, session_id: str, expires_delta: Optional[timedelta] = None) -> str:
+def create_access_token(
+    vendor_id: str, 
+    session_id: str, 
+    role: str = "vendor",
+    user_id: Optional[str] = None,
+    expires_delta: Optional[timedelta] = None
+) -> str:
     """
-    Create a JWT access token for a vendor session.
+    Create a JWT access token for a user session.
     
     Args:
-        vendor_id: The vendor's database ID
+        vendor_id: The vendor's database ID (for both vendors and agents)
         session_id: Unique session identifier (UUID)
+        role: User role - 'vendor' or 'delivery_agent'
+        user_id: The user's ID (vendor_id for vendors, agent staff_id for agents)
         expires_delta: Optional custom expiry time
         
     Returns:
@@ -85,6 +93,8 @@ def create_access_token(vendor_id: str, session_id: str, expires_delta: Optional
     to_encode = {
         "vendor_id": str(vendor_id),
         "session_id": session_id,
+        "role": role,
+        "user_id": user_id or str(vendor_id),
         "exp": expire,
         "iat": datetime.now(timezone.utc),
         "type": "access"
@@ -97,6 +107,7 @@ def create_access_token(vendor_id: str, session_id: str, expires_delta: Optional
 def decode_token(token: str) -> Optional[Dict[str, Any]]:
     """
     Decode and validate a JWT token.
+    Backward compatible: tokens without 'role' default to 'vendor'.
     
     Args:
         token: JWT token string
@@ -111,6 +122,12 @@ def decode_token(token: str) -> Optional[Dict[str, Any]]:
         
         if vendor_id is None or session_id is None:
             return None
+        
+        # Backward compat: default role to 'vendor' for old tokens
+        if "role" not in payload:
+            payload["role"] = "vendor"
+        if "user_id" not in payload:
+            payload["user_id"] = vendor_id
             
         return payload
     except JWTError:

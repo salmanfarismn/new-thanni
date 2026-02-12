@@ -36,9 +36,12 @@ export default function Dashboard() {
   useEffect(() => {
     loadData();
     loadGreeting();
-    const interval = setInterval(loadData, 30000);
+    const interval = setInterval(() => {
+      loadData();
+      loadSalesData();
+    }, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [salesFilter, customStartDate, customEndDate]);
 
   useEffect(() => {
     loadSalesData();
@@ -329,7 +332,7 @@ export default function Dashboard() {
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 sm:gap-6">
         <MetricCard icon={IndianRupee} label="Total Sale" value={`₹${salesData?.total_revenue || 0}`} color="emerald" />
         <MetricCard icon={Droplets} label="Cans Sold" value={salesData?.total_cans_sold || 0} color="sky" />
-        <MetricCard icon={CheckCircle} label="Completed" value={salesData?.total_orders || 0} color="indigo" />
+        <MetricCard icon={CheckCircle} label="Completed" value={salesData?.delivered_orders || 0} color="indigo" />
         <MetricCard
           icon={AlertCircle}
           label="Total Due"

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../context/AppContext';
-import { Package, TruckIcon, Filter, Search, CheckCircle, XCircle, IndianRupee, RefreshCw, Bell, Calendar, ChevronDown, MoreHorizontal, Eye, Clock, Users, Plus, Minus, User, MapPin, Hash, AlertCircle, Droplets, PhoneCall, MessageCircle, CreditCard, Wallet, Banknote } from 'lucide-react';
+import { Package, TruckIcon, Filter, Search, CheckCircle, XCircle, IndianRupee, RefreshCw, Bell, Calendar, ChevronDown, MoreHorizontal, Eye, Clock, Users, Plus, Minus, User, MapPin, Hash, AlertCircle, Droplets, PhoneCall, MessageCircle, CreditCard, Wallet, Banknote, Navigation } from 'lucide-react';
 import { toast } from 'sonner';
 import Card from '../components/ui/card';
 import Badge from '../components/ui/badge';
@@ -601,7 +601,7 @@ export default function Orders() {
                   </div>
 
                   {/* Contact Actions */}
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-3">
                     <a
                       href={`tel:${selectedOrder.customer_phone?.startsWith('+') ? selectedOrder.customer_phone : '+91' + selectedOrder.customer_phone?.replace(/\D/g, '').replace(/^91/, '')}`}
                       className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-white border border-slate-200 text-slate-700 font-bold text-xs shadow-sm active:scale-95 transition-transform"
@@ -616,12 +616,26 @@ export default function Orders() {
                     >
                       <MessageCircle size={14} /> Chat
                     </a>
+                    <a
+                      href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(selectedOrder.customer_address)}`}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-blue-50 border border-blue-100 text-blue-600 font-bold text-xs shadow-sm active:scale-95 transition-transform"
+                    >
+                      <Navigation size={14} /> Navigate
+                    </a>
                   </div>
 
-                  <div className="flex items-start gap-3 bg-white p-3 rounded-xl border border-slate-100 text-sm text-slate-600 font-medium leading-snug">
+                  <a
+                    href={`https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(selectedOrder.customer_address)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-3 bg-white p-3 rounded-xl border border-slate-100 text-sm text-slate-600 font-medium leading-snug hover:bg-slate-50 transition-colors"
+                  >
                     <MapPin size={16} className="mt-0.5 text-slate-400 flex-shrink-0" />
                     {selectedOrder.customer_address}
-                  </div>
+                    <span className="ml-auto text-[10px] font-bold text-blue-500 uppercase tracking-wider">Map ↗</span>
+                  </a>
                 </div>
 
                 {/* Order Stats */}
@@ -664,6 +678,26 @@ export default function Orders() {
                     </Badge>
                   </div>
                 </div>
+
+                {/* Delivery Proof Photo */}
+                {selectedOrder.delivery_photo_url && (
+                  <div className="space-y-2">
+                    <h4 className="text-[10px] font-black text-slate-400 uppercase tracking-widest pl-1">Delivery Proof</h4>
+                    <div className="relative rounded-2xl overflow-hidden border-2 border-slate-100 group">
+                      <img
+                        src={`${api.defaults.baseURL.replace('/api', '')}${selectedOrder.delivery_photo_url}`}
+                        alt="Delivery Proof"
+                        className="w-full h-48 object-cover bg-slate-50"
+                        onClick={() => window.open(`${api.defaults.baseURL.replace('/api', '')}${selectedOrder.delivery_photo_url}`, '_blank')}
+                      />
+                      <div className="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors cursor-pointer flex items-center justify-center">
+                        <div className="bg-white/90 backdrop-blur rounded-full px-3 py-1.5 text-xs font-bold text-slate-900 opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2 shadow-sm">
+                          <Eye size={12} /> View Full
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Fixed Actions Footer */}

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { api } from '../context/AppContext';
-import { Users, Plus, Trash2, Power, Phone, User, AlertCircle, Truck, Search, ShieldCheck, PhoneCall, MessageCircle } from 'lucide-react';
+import { Users, Plus, Trash2, Power, Phone, User, AlertCircle, Truck, Search, ShieldCheck, PhoneCall, MessageCircle, KeyRound, Eye, EyeOff, RefreshCw, Copy, Check } from 'lucide-react';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '../components/ui/dialog';
 import { toast } from 'sonner';
 import Button from '../components/ui/button';
@@ -12,9 +12,17 @@ export default function DeliveryAgents({ minimal = false }) {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [showForm, setShowForm] = useState(false);
-    const [formData, setFormData] = useState({ name: '', phone_number: '' });
+    const [formData, setFormData] = useState({ name: '', phone_number: '', pin: '' });
     const [formError, setFormError] = useState('');
     const [searchTerm, setSearchTerm] = useState('');
+
+    // PIN Reset state
+    const [resetPinDialog, setResetPinDialog] = useState(false);
+    const [resetTarget, setResetTarget] = useState(null);
+    const [newPin, setNewPin] = useState('');
+    const [showNewPin, setShowNewPin] = useState(false);
+    const [resettingPin, setResettingPin] = useState(false);
+    const [copiedId, setCopiedId] = useState(null);
 
     useEffect(() => {
         loadStaff();
@@ -36,6 +44,10 @@ export default function DeliveryAgents({ minimal = false }) {
         return `DA${Date.now().toString().slice(-8)}`; // DA for Delivery Agent
     };
 
+    const generatePin = () => {
+        return Math.floor(1000 + Math.random() * 9000).toString(); // 4-digit random PIN
+    };
+
     const validatePhoneNumber = (phone) => {
         const cleaned = phone.replace(/[\s\-\+]/g, '');
         return /^\d{10,15}$/.test(cleaned);
@@ -55,18 +67,33 @@ export default function DeliveryAgents({ minimal = false }) {
             return;
         }
 
+        if (formData.pin && (formData.pin.length < 4 || formData.pin.length > 6 || !/^\d+$/.test(formData.pin))) {
+            setFormError('PIN must be 4-6 digits');
+            return;
+        }
+
         try {
             setSaving(true);
-            await api.post('/delivery-staff', {
+            const payload = {
                 staff_id: generateStaffId(),
                 name: formData.name.trim(),
                 phone_number: formData.phone_number.trim(),
                 active_orders_count: 0,
                 is_active: true
-            });
+            };
+
+            // Include PIN if provided
+            if (formData.pin) {
+                payload.pin = formData.pin;
+            }
+
+            await api.post('/delivery-staff', payload);
 
             toast.success('Delivery agent added successfully!');
-            setFormData({ name: '', phone_number: '' });
+            if (formData.pin) {
+                toast.info(`Login PIN for ${formData.name}: ${formData.pin}`, { duration: 10000 });
+            }
+            setFormData({ name: '', phone_number: '', pin: '' });
             setShowForm(false);
             loadStaff();
         } catch (error) {
@@ -100,6 +127,43 @@ export default function DeliveryAgents({ minimal = false }) {
         } catch (error) {
             toast.error(error.response?.data?.detail || 'Failed to delete agent');
         }
+    };
+
+    const openResetPin = (person) => {
+        setResetTarget(person);
+        setNewPin('');
+        setShowNewPin(false);
+        setResetPinDialog(true);
+    };
+
+    const handleResetPin = async () => {
+        if (!newPin || newPin.length < 4 || newPin.length > 6 || !/^\d+$/.test(newPin)) {
+            toast.error('PIN must be 4-6 digits');
+            return;
+        }
+        setResettingPin(true);
+        try {
+            await api.put(`/delivery-staff/${resetTarget.staff_id}/reset-pin?new_pin=${newPin}`);
+            toast.success(`PIN updated for ${resetTarget.name}`);
+            toast.info(`New PIN: ${newPin}`, { duration: 8000 });
+            setResetPinDialog(false);
+            setResetTarget(null);
+            setNewPin('');
+            loadStaff();
+        } catch (error) {
+            toast.error(error.response?.data?.detail || 'Failed to reset PIN');
+        } finally {
+            setResettingPin(false);
+        }
+    };
+
+    const copyToClipboard = async (text, id) => {
+        try {
+            await navigator.clipboard.writeText(text);
+            setCopiedId(id);
+            toast.success('Copied to clipboard');
+            setTimeout(() => setCopiedId(null), 2000);
+        } catch { /* ignore */ }
     };
 
     const filteredStaff = staff.filter(person =>
@@ -194,6 +258,47 @@ export default function DeliveryAgents({ minimal = false }) {
                             </div>
                         </div>
 
+                        {/* PIN Field */}
+                        <div>
+                            <div className="flex items-center justify-between mb-2">
+                                <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider">
+                                    Login PIN
+                                </label>
+                                <button
+                                    type="button"
+                                    onClick={() => setFormData({ ...formData, pin: generatePin() })}
+                                    className="text-xs font-bold text-sky-600 hover:text-sky-700 flex items-center gap-1"
+                                >
+                                    <RefreshCw size={12} /> Auto-generate
+                                </button>
+                            </div>
+                            <div className="relative">
+                                <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                                <input
+                                    type={showNewPin ? 'text' : 'password'}
+                                    value={formData.pin}
+                                    onChange={(e) => {
+                                        const val = e.target.value.replace(/\D/g, '');
+                                        if (val.length <= 6) setFormData({ ...formData, pin: val });
+                                    }}
+                                    placeholder="4-6 digit PIN"
+                                    inputMode="numeric"
+                                    maxLength={6}
+                                    className="w-full pl-10 pr-20 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-sky-100 focus:border-sky-400 transition-all font-bold tracking-widest text-center"
+                                />
+                                <button
+                                    type="button"
+                                    onClick={() => setShowNewPin(!showNewPin)}
+                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-sky-600 transition-colors"
+                                >
+                                    {showNewPin ? <EyeOff size={18} /> : <Eye size={18} />}
+                                </button>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-1.5 ml-1">
+                                Agent uses this PIN + phone number to log in. Leave blank to skip.
+                            </p>
+                        </div>
+
                         <DialogFooter className="gap-2 sm:gap-0 mt-4">
                             <Button type="button" variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
                             <Button type="submit" disabled={saving} className="bg-sky-600 hover:bg-sky-700 text-white flex-1">{saving ? 'Saving...' : 'Create Agent'}</Button>
@@ -202,11 +307,82 @@ export default function DeliveryAgents({ minimal = false }) {
                 </DialogContent>
             </Dialog>
 
+            {/* PIN Reset Dialog */}
+            <Dialog open={resetPinDialog} onOpenChange={setResetPinDialog}>
+                <DialogContent className="sm:max-w-[380px] w-[95vw] rounded-3xl p-6">
+                    <DialogHeader>
+                        <DialogTitle className="text-xl font-black text-slate-900 flex items-center gap-2">
+                            <KeyRound className="text-amber-500" size={20} />
+                            Reset PIN
+                        </DialogTitle>
+                    </DialogHeader>
+
+                    {resetTarget && (
+                        <div className="space-y-5 mt-2">
+                            <div className="bg-slate-50 rounded-xl p-3 flex items-center gap-3">
+                                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-sky-400 to-blue-600 text-white flex items-center justify-center font-bold text-lg">
+                                    {resetTarget.name.charAt(0)}
+                                </div>
+                                <div>
+                                    <p className="font-bold text-slate-900 text-sm">{resetTarget.name}</p>
+                                    <p className="text-xs text-slate-400">{resetTarget.phone_number}</p>
+                                </div>
+                            </div>
+
+                            <div>
+                                <div className="flex items-center justify-between mb-2">
+                                    <label className="text-xs font-bold text-slate-500 uppercase tracking-wider">New PIN</label>
+                                    <button
+                                        type="button"
+                                        onClick={() => setNewPin(generatePin())}
+                                        className="text-xs font-bold text-sky-600 hover:text-sky-700 flex items-center gap-1"
+                                    >
+                                        <RefreshCw size={12} /> Generate
+                                    </button>
+                                </div>
+                                <div className="relative">
+                                    <input
+                                        type={showNewPin ? 'text' : 'password'}
+                                        value={newPin}
+                                        onChange={(e) => {
+                                            const val = e.target.value.replace(/\D/g, '');
+                                            if (val.length <= 6) setNewPin(val);
+                                        }}
+                                        placeholder="Enter new 4-6 digit PIN"
+                                        inputMode="numeric"
+                                        maxLength={6}
+                                        className="w-full px-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-100 focus:border-amber-400 transition-all font-bold tracking-[0.3em] text-center text-lg"
+                                    />
+                                    <button
+                                        type="button"
+                                        onClick={() => setShowNewPin(!showNewPin)}
+                                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-amber-600"
+                                    >
+                                        {showNewPin ? <EyeOff size={18} /> : <Eye size={18} />}
+                                    </button>
+                                </div>
+                            </div>
+
+                            <div className="flex gap-2">
+                                <Button variant="ghost" onClick={() => setResetPinDialog(false)} className="flex-1">Cancel</Button>
+                                <Button
+                                    onClick={handleResetPin}
+                                    disabled={resettingPin || !newPin || newPin.length < 4}
+                                    className="bg-amber-500 hover:bg-amber-600 text-white flex-1 disabled:opacity-50"
+                                >
+                                    {resettingPin ? 'Resetting...' : 'Reset PIN'}
+                                </Button>
+                            </div>
+                        </div>
+                    )}
+                </DialogContent>
+            </Dialog>
+
             {/* Note Banner */}
             <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-start gap-3">
                 <ShieldCheck className="text-sky-600 flex-shrink-0 mt-0.5" size={18} />
                 <div className="text-sm text-slate-600">
-                    <span className="font-semibold text-slate-900">System Note:</span> Only <strong>Active</strong> agents will receive automated order notifications. Make sure to update the <strong>Shifts</strong> page to assign them to specific time slots.
+                    <span className="font-semibold text-slate-900">Login Access:</span> Agents can log in at <strong>/login</strong> using their phone number and the PIN you set here. Only <strong>Active</strong> agents with a PIN can log in.
                 </div>
             </div>
 
@@ -249,32 +425,59 @@ export default function DeliveryAgents({ minimal = false }) {
 
                                 <h3 className="text-xl font-bold text-slate-900 truncate mb-1">{person.name}</h3>
 
-                                <div className="flex items-center gap-2 text-slate-500 text-sm font-medium mb-4">
+                                <div className="flex items-center gap-2 text-slate-500 text-sm font-medium mb-3">
                                     <Phone size={14} />
                                     {person.phone_number}
                                 </div>
 
-                                {/* Call Actions */}
-                                <div className="grid grid-cols-2 gap-3 mb-4">
-                                    <a href={`tel:${person.phone_number}`} className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm hover:bg-slate-200 transition-colors">
-                                        <PhoneCall size={16} /> Call
-                                    </a>
-                                    <a href={`https://wa.me/${person.phone_number.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-2 py-2.5 rounded-xl bg-emerald-50 text-emerald-600 font-bold text-sm hover:bg-emerald-100 transition-colors">
-                                        <MessageCircle size={16} /> Chat
-                                    </a>
+                                {/* PIN Status Badge */}
+                                <div className="flex items-center gap-2 mb-4">
+                                    {person.has_pin ? (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-emerald-50 border border-emerald-100 text-emerald-700 text-xs font-bold">
+                                            <KeyRound size={12} />
+                                            PIN Set
+                                        </span>
+                                    ) : (
+                                        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-amber-50 border border-amber-100 text-amber-600 text-xs font-bold">
+                                            <KeyRound size={12} />
+                                            No PIN
+                                        </span>
+                                    )}
+                                    {person.active_orders_count > 0 && (
+                                        <span className="inline-flex items-center px-2.5 py-1 rounded-lg text-xs font-bold bg-blue-50 text-blue-700 border border-blue-100">
+                                            <Truck size={12} className="mr-1" />
+                                            {person.active_orders_count} Active
+                                        </span>
+                                    )}
                                 </div>
 
-                                {person.active_orders_count > 0 && (
-                                    <div className="mb-6 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-800 border border-amber-200">
-                                        <Truck size={12} className="mr-1.5" />
-                                        {person.active_orders_count} Active Delivery
-                                    </div>
-                                )}
+                                {/* Action Buttons */}
+                                <div className="grid grid-cols-3 gap-2">
+                                    <a href={`tel:${person.phone_number}`} className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-slate-100 text-slate-700 font-bold text-xs hover:bg-slate-200 transition-colors">
+                                        <PhoneCall size={14} /> Call
+                                    </a>
+                                    <a href={`https://wa.me/${person.phone_number.replace(/\D/g, '')}`} target="_blank" rel="noreferrer" className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-emerald-50 text-emerald-600 font-bold text-xs hover:bg-emerald-100 transition-colors">
+                                        <MessageCircle size={14} /> Chat
+                                    </a>
+                                    <button
+                                        onClick={() => openResetPin(person)}
+                                        className="flex items-center justify-center gap-1.5 py-2.5 rounded-xl bg-amber-50 text-amber-600 font-bold text-xs hover:bg-amber-100 transition-colors"
+                                    >
+                                        <KeyRound size={14} /> PIN
+                                    </button>
+                                </div>
                             </div>
 
                             <div className="px-6 py-4 bg-slate-50 border-t border-slate-100 flex items-center justify-between">
-                                <div className="text-xs font-mono text-slate-400">
-                                    {person.staff_id}
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs font-mono text-slate-400">{person.staff_id}</span>
+                                    <button
+                                        onClick={() => copyToClipboard(person.staff_id, person.staff_id)}
+                                        className="text-slate-300 hover:text-slate-500 transition-colors"
+                                        title="Copy ID"
+                                    >
+                                        {copiedId === person.staff_id ? <Check size={14} className="text-emerald-500" /> : <Copy size={14} />}
+                                    </button>
                                 </div>
                                 <button
                                     onClick={() => deleteStaff(person.staff_id, person.name)}

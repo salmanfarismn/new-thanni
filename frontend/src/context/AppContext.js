@@ -2,7 +2,7 @@ import { useState, useEffect, createContext, useContext } from 'react';
 import api from '../api/axios';  // Use the configured axios instance
 
 // Re-export api for backward compatibility
-export { default as api } from '../api/axios';
+export { default as api, API_BASE_URL } from '../api/axios';
 
 // Company Name Context
 const CompanyNameContext = createContext();
@@ -28,37 +28,57 @@ export function CompanyNameProvider({ children }) {
             return null;
         }
     });
+    // User role state
+    const [userRole, setUserRoleState] = useState(() => {
+        return localStorage.getItem('user_role') || 'vendor';
+    });
     const [loading, setLoading] = useState(true);
+
+    // Role helpers
+    const isAgent = userRole === 'delivery_agent';
+    const isVendor = userRole === 'vendor';
+
+    const setUserRole = (role) => {
+        setUserRoleState(role);
+        localStorage.setItem('user_role', role);
+    };
 
     const loadSettings = async () => {
         try {
-            // 1. Fetch Company Name
-            const response = await api.get('/app-settings');
-            const newName = response.data.company_name || 'Thanni Canuuu';
-            setCompanyName(newName);
-            localStorage.setItem('company_name', newName);
+            // Agents skip company settings (they don't have vendor-level access)
+            if (userRole !== 'delivery_agent') {
+                // 1. Fetch Company Name
+                const response = await api.get('/app-settings');
+                const newName = response.data.company_name || 'Thanni Canuuu';
+                setCompanyName(newName);
+                localStorage.setItem('company_name', newName);
 
-            // 2. Fetch Logo
-            const logoRes = await api.get('/app-settings/logo');
-            let url = logoRes.data.logo_url;
+                // 2. Fetch Logo
+                const logoRes = await api.get('/app-settings/logo');
+                let url = logoRes.data.logo_url;
 
-            if (url && url.startsWith('/static')) {
-                const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
-                url = `${backendUrl}${url}`;
+                if (url && url.startsWith('/static')) {
+                    const backendUrl = process.env.REACT_APP_BACKEND_URL || 'http://localhost:8000';
+                    url = `${backendUrl}${url}`;
+                }
+
+                setLogoUrl(url);
+                if (url) {
+                    localStorage.setItem('logo_url', url);
+                } else {
+                    localStorage.removeItem('logo_url');
+                }
             }
 
-            setLogoUrl(url);
-            if (url) {
-                localStorage.setItem('logo_url', url);
-            } else {
-                localStorage.removeItem('logo_url');
-            }
-
-            // 3. Fetch/Sync Vendor Info
-            const vendorRes = await api.get('/auth/me');
-            if (vendorRes.data) {
-                setVendor(vendorRes.data);
-                localStorage.setItem('vendor', JSON.stringify(vendorRes.data));
+            // 3. Fetch/Sync User Info (works for both roles)
+            const userRes = await api.get('/auth/me');
+            if (userRes.data) {
+                setVendor(userRes.data);
+                localStorage.setItem('vendor', JSON.stringify(userRes.data));
+                // Update role from server response
+                if (userRes.data.role) {
+                    setUserRole(userRes.data.role);
+                }
             }
         } catch (error) {
             console.error('Error loading settings:', error);
@@ -98,6 +118,10 @@ export function CompanyNameProvider({ children }) {
             setLogoUrl: updateLogoUrl,
             vendor,
             setVendor: updateVendor,
+            userRole,
+            setUserRole,
+            isAgent,
+            isVendor,
             refreshCompanyName: loadSettings,
             loading
         }}>
@@ -105,3 +129,4 @@ export function CompanyNameProvider({ children }) {
         </CompanyNameContext.Provider>
     );
 }
+

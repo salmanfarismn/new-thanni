@@ -41,6 +41,14 @@ from schemas import (
     ProfileUpdateRequest,
     GreetingResponse
 )
+from pydantic import BaseModel, Field
+
+# Agent login schema
+class AgentLoginRequest(BaseModel):
+    """Schema for delivery agent login."""
+    phone: str = Field(..., description="Agent's registered phone number")
+    pin: str = Field(..., min_length=4, max_length=6, description="Agent PIN set by vendor")
+    device_name: Optional[str] = Field(default="Mobile Device", max_length=100)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -279,8 +287,13 @@ async def login_vendor(data: VendorLogin, request: Request):
     
     await db.vendor_sessions.insert_one(session_doc)
     
-    # Create access token
-    access_token = create_access_token(vendor_id, session_id)
+    # Create access token with role
+    access_token = create_access_token(
+        vendor_id=vendor_id, 
+        session_id=session_id,
+        role="vendor",
+        user_id=vendor_id
+    )
     
     logger.info(f"Vendor login: {vendor['business_name']} from {client_ip}")
     
@@ -295,49 +308,218 @@ async def login_vendor(data: VendorLogin, request: Request):
             phone=vendor["phone"],
             is_active=vendor.get("is_active", True),
             created_at=datetime.fromisoformat(vendor["created_at"]) if isinstance(vendor["created_at"], str) else vendor["created_at"]
-        )
+        ),
+        role="vendor"
     )
+
+
+# ============================================
+# AGENT LOGIN ENDPOINT
+# ============================================
+
+@router.post("/agent/login")
+async def login_agent(data: AgentLoginRequest, request: Request):
+    """
+    Login a delivery agent and create a new session.
+    Agents authenticate with phone + PIN (set by their vendor).
+    """
+    # Normalize phone
+    phone = data.phone.strip()
+    if not phone.startswith('+'):
+        phone = f"+91{phone.replace('+91', '').replace(' ', '')}"
+    
+    # Find agent by phone in delivery_staff collection
+    agent = await db.delivery_staff.find_one({"phone_number": phone})
+    
+    # Also try without country code prefix for flexibility
+    if not agent:
+        digits = phone.replace('+', '').replace('91', '', 1) if phone.startswith('+91') else phone
+        agent = await db.delivery_staff.find_one({"phone_number": {"$regex": f"{digits}$"}})
+    
+    if not agent:
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid phone number or PIN. Please contact your vendor."
+        )
+    
+    # Check if agent is active
+    if not agent.get("is_active", True):
+        raise HTTPException(
+            status_code=403,
+            detail="Your account has been deactivated. Please contact your vendor."
+        )
+    
+    # Check if agent has a PIN set
+    if not agent.get("pin_hash"):
+        raise HTTPException(
+            status_code=400,
+            detail="PIN not set. Please ask your vendor to set up your login credentials."
+        )
+    
+    # Verify PIN
+    if not verify_pin(data.pin, agent["pin_hash"]):
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid phone number or PIN"
+        )
+    
+    # Get vendor info for the agent
+    vendor_id = agent.get("vendor_id")
+    if not vendor_id:
+        raise HTTPException(
+            status_code=500,
+            detail="Agent not properly configured. Missing vendor assignment."
+        )
+    
+    # Get client info
+    client_ip = request.client.host if request.client else "unknown"
+    user_agent = request.headers.get("user-agent", "Unknown")
+    device_fingerprint = generate_device_fingerprint(user_agent, client_ip)
+    
+    # Generate session
+    session_id = generate_session_id()
+    agent_id = agent["staff_id"]
+    
+    # Calculate expiry
+    expires_at = datetime.now(timezone.utc) + timedelta(days=ACCESS_TOKEN_EXPIRE_DAYS)
+    
+    # Create session document (shared sessions collection)
+    session_doc = {
+        "session_id": session_id,
+        "vendor_id": vendor_id,
+        "user_id": agent_id,
+        "role": "delivery_agent",
+        "device_name": data.device_name or "Mobile Device",
+        "device_fingerprint": device_fingerprint,
+        "ip_address": client_ip,
+        "user_agent": user_agent,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "last_active": datetime.now(timezone.utc).isoformat(),
+        "expires_at": expires_at.isoformat(),
+        "is_revoked": False
+    }
+    
+    await db.vendor_sessions.insert_one(session_doc)
+    
+    # Create access token with agent role
+    access_token = create_access_token(
+        vendor_id=vendor_id,
+        session_id=session_id,
+        role="delivery_agent",
+        user_id=agent_id
+    )
+    
+    # Update agent last_login
+    await db.delivery_staff.update_one(
+        {"staff_id": agent_id},
+        {"$set": {"last_login": datetime.now(timezone.utc).isoformat()}}
+    )
+    
+    # Get vendor business name for response
+    from bson import ObjectId
+    vendor = await db.vendors.find_one({"_id": ObjectId(vendor_id)})
+    vendor_name = vendor["business_name"] if vendor else "Unknown"
+    
+    logger.info(f"Agent login: {agent['name']} (vendor: {vendor_name}) from {client_ip}")
+    
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "expires_in": ACCESS_TOKEN_EXPIRE_DAYS * 24 * 60 * 60,
+        "role": "delivery_agent",
+        "user": {
+            "id": agent_id,
+            "name": agent["name"],
+            "phone": agent["phone_number"],
+            "vendor_id": vendor_id,
+            "vendor_name": vendor_name,
+            "is_active": agent.get("is_active", True)
+        }
+    }
 
 
 # ============================================
 # GET CURRENT USER (ME)
 # ============================================
 
-@router.get("/me", response_model=VendorProfileResponse)
-async def get_current_user(vendor_id: str = Depends(get_current_vendor_id)):
+@router.get("/me")
+async def get_current_user(
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)] = None,
+    authorization: Annotated[Optional[str], Header()] = None
+):
     """
-    Get current authenticated vendor's profile.
+    Get current authenticated user's profile.
+    Works for both vendors and delivery agents.
     """
     from bson import ObjectId
     
-    vendor = await db.vendors.find_one({"_id": ObjectId(vendor_id)})
+    # Extract token
+    token = None
+    if credentials:
+        token = credentials.credentials
+    elif authorization:
+        token = extract_token_from_header(authorization)
     
-    if not vendor:
-        raise HTTPException(status_code=404, detail="Vendor not found")
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
     
-    # Get statistics - filter by vendor_id for data isolation
-    total_orders = await db.orders.count_documents({"vendor_id": vendor_id})
-    total_customers = await db.customers.count_documents({"vendor_id": vendor_id})
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
     
-    # Calculate total revenue
-    pipeline = [
-        {"$match": {"vendor_id": vendor_id, "status": "delivered"}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
-    ]
-    revenue_result = await db.orders.aggregate(pipeline).to_list(1)
-    total_revenue = revenue_result[0]["total"] if revenue_result else 0
+    role = payload.get("role", "vendor")
+    vendor_id = payload.get("vendor_id")
     
-    return VendorProfileResponse(
-        id=str(vendor["_id"]),
-        name=vendor.get("name", vendor["business_name"]),  # Fallback for existing vendors
-        business_name=vendor["business_name"],
-        phone=vendor["phone"],
-        is_active=vendor.get("is_active", True),
-        created_at=datetime.fromisoformat(vendor["created_at"]) if isinstance(vendor["created_at"], str) else vendor["created_at"],
-        total_orders=total_orders,
-        total_customers=total_customers,
-        total_revenue=total_revenue
-    )
+    if role == "delivery_agent":
+        # Return agent profile
+        agent_id = payload.get("user_id")
+        agent = await db.delivery_staff.find_one({"staff_id": agent_id, "vendor_id": vendor_id})
+        
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        
+        vendor = await db.vendors.find_one({"_id": ObjectId(vendor_id)})
+        vendor_name = vendor["business_name"] if vendor else "Unknown"
+        
+        return {
+            "id": agent["staff_id"],
+            "name": agent["name"],
+            "phone": agent.get("phone_number", ""),
+            "role": "delivery_agent",
+            "vendor_id": vendor_id,
+            "vendor_name": vendor_name,
+            "is_active": agent.get("is_active", True)
+        }
+    else:
+        # Return vendor profile (original behavior)
+        vendor = await db.vendors.find_one({"_id": ObjectId(vendor_id)})
+        
+        if not vendor:
+            raise HTTPException(status_code=404, detail="Vendor not found")
+        
+        # Get statistics
+        total_orders = await db.orders.count_documents({"vendor_id": vendor_id})
+        total_customers = await db.customers.count_documents({"vendor_id": vendor_id})
+        
+        pipeline = [
+            {"$match": {"vendor_id": vendor_id, "status": "delivered"}},
+            {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+        ]
+        revenue_result = await db.orders.aggregate(pipeline).to_list(1)
+        total_revenue = revenue_result[0]["total"] if revenue_result else 0
+        
+        return {
+            "id": str(vendor["_id"]),
+            "name": vendor.get("name", vendor["business_name"]),
+            "business_name": vendor["business_name"],
+            "phone": vendor["phone"],
+            "role": "vendor",
+            "is_active": vendor.get("is_active", True),
+            "created_at": vendor["created_at"],
+            "total_orders": total_orders,
+            "total_customers": total_customers,
+            "total_revenue": total_revenue
+        }
 
 
 @router.get("/greeting", response_model=GreetingResponse)
