@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Thanni Canuuu</string>
+    <string name="title_activity_main">Thanni Canuuu</string>
+    <string name="package_name">com.thannicanuuu.app</string>
+    <string name="custom_url_scheme">com.thannicanuuu.app</string>
+</resources>

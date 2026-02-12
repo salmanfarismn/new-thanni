@@ -30,7 +30,11 @@ app.use((req, res, next) => {
 });
 
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://127.0.0.1:8000';
-const SERVICE_API_KEY = process.env.SERVICE_API_KEY || 'thanni-canuuu-service-secret-key-2025';
+const SERVICE_API_KEY = process.env.SERVICE_API_KEY;
+if (!SERVICE_API_KEY) {
+    console.error('FATAL: SERVICE_API_KEY environment variable is required. Set it in .env file.');
+    process.exit(1);
+}
 const PORT = process.env.PORT || 3001;
 
 // Configure axios for secure backend communication
@@ -1189,6 +1193,22 @@ app.get('/vendors', (req, res) => {
         });
     }
     res.json({ count: vendors.length, vendors });
+});
+
+// Health check endpoint for monitoring
+app.get('/health', (req, res) => {
+    let connectedCount = 0;
+    for (const [, client] of vendorClients.entries()) {
+        if (client.isConnected) connectedCount++;
+    }
+    res.json({
+        status: 'healthy',
+        uptime: process.uptime(),
+        activeVendors: vendorClients.size,
+        connectedVendors: connectedCount,
+        memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        timestamp: new Date().toISOString()
+    });
 });
 
 // Legacy endpoints

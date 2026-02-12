@@ -48,16 +48,36 @@ const webpackConfig = {
     },
     configure: (webpackConfig) => {
 
+      // Strip console.log/warn/debug from production builds (keep console.error)
+      if (process.env.NODE_ENV === 'production') {
+        const TerserPlugin = require('terser-webpack-plugin');
+        webpackConfig.optimization.minimizer = webpackConfig.optimization.minimizer.map(
+          (plugin) => {
+            if (plugin instanceof TerserPlugin) {
+              return new TerserPlugin({
+                terserOptions: {
+                  compress: {
+                    drop_console: false,
+                    pure_funcs: ['console.log', 'console.warn', 'console.debug'],
+                  },
+                },
+              });
+            }
+            return plugin;
+          }
+        );
+      }
+
       // Add ignored patterns to reduce watched directories
-        webpackConfig.watchOptions = {
-          ...webpackConfig.watchOptions,
-          ignored: [
-            '**/node_modules/**',
-            '**/.git/**',
-            '**/build/**',
-            '**/dist/**',
-            '**/coverage/**',
-            '**/public/**',
+      webpackConfig.watchOptions = {
+        ...webpackConfig.watchOptions,
+        ignored: [
+          '**/node_modules/**',
+          '**/.git/**',
+          '**/build/**',
+          '**/dist/**',
+          '**/coverage/**',
+          '**/public/**',
         ],
       };
 

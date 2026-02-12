@@ -147,6 +147,21 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info("Starting up HydroFlow backend...")
     logger.info(f"Connected to MongoDB: {os.environ['DB_NAME']}")
+
+    # Create database indexes for performance
+    try:
+        await db.orders.create_index([("vendor_id", 1), ("order_id", 1)], unique=True)
+        await db.orders.create_index([("vendor_id", 1), ("status", 1)])
+        await db.orders.create_index([("delivery_staff_id", 1), ("status", 1)])
+        await db.orders.create_index([("created_at", -1)])
+        await db.customers.create_index([("vendor_id", 1), ("phone_number", 1)], unique=True)
+        await db.stock.create_index([("vendor_id", 1), ("date", 1)], unique=True)
+        await db.customer_states.create_index([("updated_at", 1)], expireAfterSeconds=3600)
+        await db.vendor_sessions.create_index([("vendor_id", 1), ("session_id", 1)])
+        logger.info("Database indexes created/verified successfully")
+    except Exception as e:
+        logger.warning(f"Index creation warning (may already exist): {e}")
+
     yield
     # Shutdown
     logger.info("Shutting down HydroFlow backend...")
@@ -163,10 +178,47 @@ app.mount("/static", StaticFiles(directory=str(_static_dir)), name="static")
 
 @api_router.get("/health")
 async def health_check():
-    return {"status": "ok", "service": "backend"}
+    """Comprehensive health check endpoint for monitoring"""
+    services = {}
+    overall_healthy = True
+
+    # Check MongoDB
+    try:
+        await db.command("ping")
+        services["database"] = "ok"
+    except Exception as e:
+        services["database"] = f"error: {str(e)}"
+        overall_healthy = False
+
+    # Check WhatsApp service
+    try:
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.get(
+                f"{WHATSAPP_SERVICE_URL}/health",
+                timeout=5.0
+            )
+            if response.status_code == 200:
+                services["whatsapp"] = "ok"
+            else:
+                services["whatsapp"] = "degraded"
+    except Exception:
+        services["whatsapp"] = "unreachable"
+
+    from fastapi.responses import JSONResponse
+    status_code = 200 if overall_healthy else 503
+    return JSONResponse(
+        status_code=status_code,
+        content={
+            "status": "healthy" if overall_healthy else "unhealthy",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "services": services
+        }
+    )
 
 WHATSAPP_SERVICE_URL = os.environ.get('WHATSAPP_SERVICE_URL', 'http://localhost:3001')
-SERVICE_API_KEY = os.environ.get('SERVICE_API_KEY', 'thanni-canuuu-service-secret-key-2025')
+SERVICE_API_KEY = os.environ.get('SERVICE_API_KEY')
+if not SERVICE_API_KEY:
+    raise RuntimeError("CRITICAL: SERVICE_API_KEY environment variable is required. Set it in your .env file.")
 
 # Mount static files
 from fastapi.staticfiles import StaticFiles
@@ -2848,24 +2900,50 @@ async def upload_company_logo(
 ):
     """
     Upload and update vendor's company logo.
+    Security: validates file extension, MIME type, and enforces 5MB size limit.
     """
     try:
         from bson import ObjectId
         import shutil
         import os
         
+        # Security: Validate file extension
+        ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+        file_extension = os.path.splitext(file.filename or "")[1].lower()
+        if file_extension not in ALLOWED_EXTENSIONS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file type '{file_extension}'. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
+            )
+        
+        # Security: Validate MIME type
+        ALLOWED_MIMES = {"image/jpeg", "image/png", "image/webp"}
+        if file.content_type and file.content_type not in ALLOWED_MIMES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid content type '{file.content_type}'. Allowed: {', '.join(ALLOWED_MIMES)}"
+            )
+        
+        # Security: Enforce 5MB size limit
+        MAX_SIZE_BYTES = 5 * 1024 * 1024
+        contents = await file.read()
+        if len(contents) > MAX_SIZE_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File too large ({len(contents) // 1024 // 1024}MB). Maximum size: 5MB"
+            )
+        
         # Create uploads directory if not exists
         UPLOAD_DIR = "static/uploads/logos"
         os.makedirs(UPLOAD_DIR, exist_ok=True)
         
-        # Generate unique filename
-        file_extension = os.path.splitext(file.filename)[1]
+        # Generate unique filename (sanitized)
         filename = f"{vendor_id}_{datetime.now().timestamp()}{file_extension}"
         file_path = os.path.join(UPLOAD_DIR, filename)
         
-        # Save file
+        # Save validated file
         with open(file_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
+            buffer.write(contents)
             
         # URL path to be stored (relative to mount point)
         logo_url = f"/static/uploads/logos/{filename}"
@@ -2881,9 +2959,11 @@ async def upload_company_logo(
         
         return {"success": True, "logo_url": logo_url, "message": "Logo uploaded successfully"}
         
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"Logo upload failed: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to upload logo: {str(e)}")
+        raise HTTPException(status_code=500, detail="Failed to upload logo")
 
 @api_router.delete("/app-settings/logo")
 async def delete_company_logo(vendor_id: str = Depends(get_current_vendor_id)):
@@ -3712,10 +3792,15 @@ async def health_check():
         }
 
 # Configure CORS middleware BEFORE including router
+# Include Capacitor origins for Android native app
+_cors_origins = os.environ.get('CORS_ORIGINS', '*').split(',')
+_capacitor_origins = ['https://localhost', 'capacitor://localhost', 'http://localhost']
+_all_origins = list(set(_cors_origins + _capacitor_origins))
+
 app.add_middleware(
     CORSMiddleware,
     allow_credentials=True,
-    allow_origins=os.environ.get('CORS_ORIGINS', '*').split(','),
+    allow_origins=_all_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
