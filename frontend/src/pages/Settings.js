@@ -205,38 +205,36 @@ export default function Settings() {
   return (
     <div className="space-y-8 pb-32 md:pb-16 max-w-6xl mx-auto animate-fade-in px-4 md:px-8">
       {/* Page Header */}
-      <div className="flex flex-col gap-1.5 pt-2">
+      <div className="pt-8 md:pt-4 mb-10 relative z-50">
         <h1 className="text-3xl md:text-3xl font-black text-slate-900 tracking-tight">Settings</h1>
         <p className="text-slate-500 font-medium text-base">Manage your business & app preferences</p>
       </div>
 
-      <Tabs defaultValue="general" className="mt-8 flex flex-col lg:flex-row gap-6 lg:gap-10 relative">
-        {/* Navigation - Sticky & Clean */}
-        <aside className="lg:w-64 flex-shrink-0 sticky top-[72px] lg:top-24 z-20 -mx-4 lg:mx-0">
-          <div className="bg-slate-50/95 lg:bg-transparent backdrop-blur-md lg:backdrop-blur-none px-4 md:px-8 py-3 lg:p-0 border-b border-slate-200 lg:border-0">
-            <TabsList className="flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible items-center lg:items-stretch gap-2 bg-transparent p-0 no-scrollbar w-full">
-              {[
-                { id: 'general', icon: Store, label: 'General' },
-                { id: 'pricing', icon: Wallet, label: 'Pricing' },
-                { id: 'workflows', icon: Zap, label: 'Workflows' },
-                { id: 'security', icon: Shield, label: 'Security' }
-              ].map(({ id, icon: Icon, label }) => (
-                <TabsTrigger
-                  key={id}
-                  value={id}
-                  className="
-                    flex-shrink-0 flex items-center gap-3 px-4 py-3 rounded-full lg:rounded-xl text-sm font-bold border border-transparent
-                    data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-md
-                    lg:data-[state=active]:bg-white lg:data-[state=active]:text-slate-900 lg:data-[state=active]:border-slate-200 lg:data-[state=active]:shadow-sm
-                    text-slate-500 hover:text-slate-900 transition-all duration-200
-                  "
-                >
-                  <Icon size={18} strokeWidth={2.5} />
-                  <span>{label}</span>
-                </TabsTrigger>
-              ))}
-            </TabsList>
-          </div>
+      <Tabs defaultValue="general" className="flex flex-col lg:flex-row gap-8 lg:gap-10 relative z-10">
+        {/* Navigation Sidebar */}
+        <aside className="lg:w-64 flex-shrink-0 lg:sticky lg:top-24 z-20">
+          <TabsList className="flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible items-center lg:items-stretch gap-2 bg-transparent p-0 no-scrollbar w-full h-auto">
+            {[
+              { id: 'general', icon: Store, label: 'General' },
+              { id: 'pricing', icon: Wallet, label: 'Pricing' },
+              { id: 'workflows', icon: Zap, label: 'Workflows' },
+              { id: 'security', icon: Shield, label: 'Security' }
+            ].map(({ id, icon: Icon, label }) => (
+              <TabsTrigger
+                key={id}
+                value={id}
+                className="
+                  flex-shrink-0 flex items-center gap-3 px-4 py-3 rounded-full lg:rounded-xl text-sm font-bold border border-transparent
+                  data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-md
+                  lg:data-[state=active]:bg-white lg:data-[state=active]:text-slate-900 lg:data-[state=active]:border-slate-200 lg:data-[state=active]:shadow-sm
+                  text-slate-500 hover:text-slate-900 transition-all duration-200
+                "
+              >
+                <Icon size={18} strokeWidth={2.5} />
+                <span>{label}</span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
         </aside>
 
         {/* Content Area */}
