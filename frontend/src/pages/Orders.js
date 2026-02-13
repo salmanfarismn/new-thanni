@@ -36,6 +36,10 @@ export default function Orders() {
     litre_size: 20,
     quantity: 1
   });
+  const [deliveryAgents, setDeliveryAgents] = useState([]);
+  const [reassigning, setReassigning] = useState(false);
+  const [isReassignModalOpen, setIsReassignModalOpen] = useState(false);
+  const [newAgentId, setNewAgentId] = useState('');
 
   // Handle URL parameters for filtering
   useEffect(() => {
@@ -66,6 +70,19 @@ export default function Orders() {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
+
+  useEffect(() => {
+    loadDeliveryAgents();
+  }, []);
+
+  const loadDeliveryAgents = async () => {
+    try {
+      const response = await api.get('/delivery-staff');
+      setDeliveryAgents(response.data.filter(agent => agent.is_active !== false));
+    } catch (error) {
+      console.error('Error loading delivery agents:', error);
+    }
+  };
 
   const loadOrders = async () => {
     try {
@@ -135,6 +152,30 @@ export default function Orders() {
     } catch (error) {
       console.error('Error retrying notification:', error);
       toast.error('Failed to retry notification');
+    }
+  };
+
+  const reassignOrder = async () => {
+    if (!newAgentId) {
+      toast.error('Please select an agent');
+      return;
+    }
+
+    try {
+      setReassigning(true);
+      await api.put(`/orders/${selectedOrder.order_id}/reassign`, null, {
+        params: { new_staff_id: newAgentId }
+      });
+      toast.success('Order reassigned successfully!');
+      setIsReassignModalOpen(false);
+      setNewAgentId('');
+      loadOrders();
+      setIsDialogOpen(false);
+    } catch (error) {
+      console.error('Error reassigning order:', error);
+      toast.error(error.response?.data?.detail || 'Failed to reassign order');
+    } finally {
+      setReassigning(false);
     }
   };
 
@@ -702,53 +743,34 @@ export default function Orders() {
 
               {/* Fixed Actions Footer */}
               <div className="p-4 bg-white border-t border-slate-50 flex-shrink-0 z-20">
+                {['pending', 'assigned', 'in_queue'].includes(selectedOrder.status) && (
+                  <Button
+                    variant="ghost"
+                    className="w-full mb-4 rounded-xl h-12 font-bold text-sky-600 bg-sky-50 hover:bg-sky-100 border-none flex items-center justify-center gap-2 shadow-sm"
+                    onClick={() => {
+                      setIsReassignModalOpen(true);
+                      setNewAgentId(selectedOrder.delivery_staff_id || '');
+                    }}
+                  >
+                    <Users size={18} /> Reassign Agent
+                  </Button>
+                )}
                 {selectedOrder.status === 'pending' && (
                   <div className="space-y-4">
                     <p className="text-[10px] font-black text-slate-400 uppercase tracking-[0.2em] text-center">Complete Order</p>
 
-                    {/* Empty Cans Collected Input */}
-                    <div className="bg-slate-50 p-3 sm:p-4 rounded-2xl border border-slate-100 space-y-3">
-                      <div className="flex flex-col gap-1">
-                        <div className="flex justify-between items-center">
-                          <label className="text-[10px] sm:text-xs font-black text-slate-500 uppercase tracking-wider">Empty Cans Collected</label>
-                          <span className="text-[10px] font-bold text-sky-600 bg-sky-50 px-2 py-0.5 rounded-md border border-sky-100">Default: {selectedOrder.quantity}</span>
-                        </div>
-                        <p className="text-[10px] text-slate-400 font-medium italic">* To be handled by Delivery App in future</p>
-                      </div>
-
-                      <div className="flex items-center gap-3 bg-white p-1 rounded-xl border border-slate-200">
-                        <button
-                          onClick={() => setSelectedOrder(prev => ({ ...prev, empty_cans: Math.max(0, (prev.empty_cans ?? prev.quantity) - 1) }))}
-                          className="w-12 h-10 rounded-lg bg-slate-50 text-slate-500 hover:bg-slate-100 border-r border-slate-100 flex items-center justify-center active:bg-slate-200 transition-colors"
-                        >
-                          <Minus size={18} strokeWidth={3} />
-                        </button>
-                        <input
-                          type="number"
-                          value={selectedOrder.empty_cans ?? selectedOrder.quantity}
-                          onChange={(e) => setSelectedOrder(prev => ({ ...prev, empty_cans: Math.max(0, parseInt(e.target.value) || 0) }))}
-                          className="flex-1 text-center font-black text-xl bg-transparent border-none focus:ring-0 p-0 text-slate-900 placeholder:text-slate-300"
-                        />
-                        <button
-                          onClick={() => setSelectedOrder(prev => ({ ...prev, empty_cans: (prev.empty_cans ?? prev.quantity) + 1 }))}
-                          className="w-12 h-10 rounded-lg bg-slate-900 text-white hover:bg-slate-800 flex items-center justify-center active:scale-95 transition-transform shadow-sm"
-                        >
-                          <Plus size={18} strokeWidth={3} />
-                        </button>
-                      </div>
-                    </div>
-
                     <div className="grid grid-cols-2 gap-3">
-                      <Button variant="primary" className="bg-emerald-500 hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_cash', 'cash', selectedOrder.empty_cans ?? selectedOrder.quantity)}>
+
+                      <Button variant="primary" className="bg-emerald-500 hover:bg-emerald-600 shadow-lg shadow-emerald-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_cash', 'cash')}>
                         <span className="text-xs font-medium opacity-90">Payment: Cash</span>
                         <span className="text-sm font-black">Delivered</span>
                       </Button>
-                      <Button variant="accent" className="bg-sky-500 hover:bg-sky-600 shadow-lg shadow-sky-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_upi', 'upi', selectedOrder.empty_cans ?? selectedOrder.quantity)}>
+                      <Button variant="accent" className="bg-sky-500 hover:bg-sky-600 shadow-lg shadow-sky-500/20 h-auto py-3 flex-col gap-0.5 rounded-xl border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'paid_upi', 'upi')}>
                         <span className="text-xs font-medium opacity-90">Payment: UPI</span>
                         <span className="text-sm font-black">Delivered</span>
                       </Button>
                     </div>
-                    <Button variant="secondary" className="w-full rounded-xl h-12 font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'delivered_unpaid', null, selectedOrder.empty_cans ?? selectedOrder.quantity)}>
+                    <Button variant="secondary" className="w-full rounded-xl h-12 font-bold text-slate-500 bg-slate-50 hover:bg-slate-100 border-none" onClick={() => updateOrderStatus(selectedOrder.order_id, 'delivered', 'delivered_unpaid')}>
                       Mark Delivered Only (Unpaid)
                     </Button>
                   </div>
@@ -898,6 +920,69 @@ export default function Orders() {
               isLoading={isCreating}
             >
               {isCreating ? 'Creating...' : 'Confirm Order'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      {/* Reassign Agent Dialog */}
+      <Dialog open={isReassignModalOpen} onOpenChange={setIsReassignModalOpen}>
+        <DialogContent className="w-[90vw] sm:max-w-[400px] p-0 border-none shadow-2xl rounded-[32px] bg-white">
+          <DialogHeader className="px-8 pt-8 pb-4">
+            <DialogTitle className="text-xl font-black text-slate-900 flex items-center gap-3">
+              <div className="w-10 h-10 bg-sky-50 rounded-xl flex items-center justify-center text-sky-500">
+                <Users size={20} />
+              </div>
+              Reassign Agent
+            </DialogTitle>
+            <DialogDescription className="text-slate-500 font-medium ml-1">
+              Select a new agent for this order
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="px-8 py-4 space-y-4">
+            <div className="space-y-2">
+              <label className="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Select Delivery Agent</label>
+              <div className="grid grid-cols-1 gap-2 max-h-[40vh] overflow-y-auto pr-2 custom-scrollbar">
+                {deliveryAgents.map(agent => (
+                  <button
+                    key={agent.staff_id}
+                    onClick={() => setNewAgentId(agent.staff_id)}
+                    className={`flex items-center justify-between p-4 rounded-2xl border-2 transition-all ${newAgentId === agent.staff_id
+                      ? 'bg-sky-50 border-sky-500 shadow-sm'
+                      : 'bg-white border-slate-100 hover:border-slate-200'
+                      }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${newAgentId === agent.staff_id ? 'bg-sky-500 text-white' : 'bg-slate-100 text-slate-500'}`}>
+                        {agent.name.charAt(0)}
+                      </div>
+                      <div className="text-left">
+                        <div className={`font-bold text-sm ${newAgentId === agent.staff_id ? 'text-sky-900' : 'text-slate-700'}`}>{agent.name}</div>
+                        <div className="text-[10px] text-slate-400 font-medium">Orders: {agent.active_orders_count || 0}</div>
+                      </div>
+                    </div>
+                    {newAgentId === agent.staff_id && <CheckCircle size={16} className="text-sky-500" />}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter className="p-8 border-t border-slate-50 flex gap-3">
+            <Button
+              variant="ghost"
+              onClick={() => setIsReassignModalOpen(false)}
+              className="flex-1 h-12 rounded-xl text-slate-500 font-bold"
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={reassignOrder}
+              disabled={reassigning || !newAgentId}
+              className="flex-[2] h-12 bg-sky-500 hover:bg-sky-600 text-white rounded-xl font-bold shadow-lg shadow-sky-500/20"
+              isLoading={reassigning}
+            >
+              {reassigning ? 'Reassigning...' : 'Confirm Reassign'}
             </Button>
           </DialogFooter>
         </DialogContent>

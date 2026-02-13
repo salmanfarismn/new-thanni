@@ -317,7 +317,7 @@ export default function Register() {
                 </div>
 
                 {/* Footer for Mobile */}
-                <div className="absolute bottom-6 w-full text-center lg:hidden">
+                <div className="mt-8 mb-6 w-full text-center lg:hidden">
                     <p className="text-xs text-slate-400 font-medium">© 2026 Thanni Canuuu</p>
                 </div>
             </div>

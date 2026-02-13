@@ -59,7 +59,7 @@ const AgentLayout = ({ children }) => {
     const navItems = [
         { path: '/agent/dashboard', icon: LayoutDashboard, label: 'Home' },
         { path: '/agent/orders', icon: Package, label: 'Orders', badge: pendingCount },
-        { path: '/agent/complete', icon: ClipboardCheck, label: 'Complete' },
+        { path: '/agent/complete', icon: Truck, label: 'Deliver' },
         { path: '/agent/damage', icon: DamageIcon, label: 'Report' },
         { path: '/agent/history', icon: History, label: 'History' },
     ];
@@ -108,7 +108,7 @@ const AgentLayout = ({ children }) => {
                             <Link
                                 key={item.path}
                                 to={item.path}
-                                className={`relative flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl transition-all duration-200 ${active
+                                className={`relative flex flex-col items-center gap-0.5 py-2 px-3 rounded-xl transition-all duration-200 active:scale-90 touch-manipulation ${active
                                     ? 'text-emerald-600'
                                     : 'text-slate-400 hover:text-slate-600'
                                     }`}
@@ -117,12 +117,12 @@ const AgentLayout = ({ children }) => {
                                     <Icon className="w-5 h-5" strokeWidth={active ? 2.5 : 2} />
                                     {/* Badge */}
                                     {item.badge > 0 && (
-                                        <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center px-1 shadow-sm shadow-red-500/30">
+                                        <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] bg-red-500 text-white text-[10px] font-black rounded-full flex items-center justify-center px-1 shadow-sm shadow-red-500/30 animate-in zoom-in duration-300">
                                             {item.badge > 9 ? '9+' : item.badge}
                                         </span>
                                     )}
                                 </div>
-                                <span className={`text-[10px] font-bold tracking-wide ${active ? 'text-emerald-700' : ''}`}>
+                                <span className={`text-[10px] font-black uppercase tracking-tighter transition-opacity ${active ? 'text-emerald-700 opacity-100' : 'opacity-60'}`}>
                                     {item.label}
                                 </span>
                             </Link>

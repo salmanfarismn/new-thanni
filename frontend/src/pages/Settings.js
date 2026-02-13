@@ -205,15 +205,15 @@ export default function Settings() {
   return (
     <div className="space-y-8 pb-32 md:pb-16 max-w-6xl mx-auto animate-fade-in px-4 md:px-8">
       {/* Page Header */}
-      <div className="pt-8 md:pt-4 mb-10 relative z-50">
+      <div className="pt-12 md:pt-4 mb-4 md:mb-12 relative z-30">
         <h1 className="text-3xl md:text-3xl font-black text-slate-900 tracking-tight">Settings</h1>
         <p className="text-slate-500 font-medium text-base">Manage your business & app preferences</p>
       </div>
 
-      <Tabs defaultValue="general" className="flex flex-col lg:flex-row gap-8 lg:gap-10 relative z-10">
+      <Tabs defaultValue="general" className="flex flex-col lg:flex-row gap-8 lg:gap-10 mt-8 relative z-10">
         {/* Navigation Sidebar */}
         <aside className="lg:w-64 flex-shrink-0 lg:sticky lg:top-24 z-20">
-          <TabsList className="flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible items-center lg:items-stretch gap-2 bg-transparent p-0 no-scrollbar w-full h-auto">
+          <TabsList className="flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible items-center lg:items-stretch gap-2 bg-slate-50/50 p-2 rounded-2xl lg:bg-transparent lg:p-0 no-scrollbar w-full h-auto sticky top-0 lg:relative z-20 backdrop-blur-sm lg:backdrop-blur-none border border-slate-100 lg:border-none">
             {[
               { id: 'general', icon: Store, label: 'General' },
               { id: 'pricing', icon: Wallet, label: 'Pricing' },

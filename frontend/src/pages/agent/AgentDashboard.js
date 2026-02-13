@@ -149,7 +149,7 @@ export default function AgentDashboard() {
                 <div className="grid grid-cols-2 gap-3">
                     <QuickActionCard
                         icon={ClipboardCheck}
-                        label="Complete"
+                        label="Deliver"
                         desc="Mark Delivered"
                         color="emerald"
                         onClick={() => navigate('/agent/complete')}
@@ -233,8 +233,8 @@ export default function AgentDashboard() {
                         <div className="w-20 h-20 bg-emerald-50 rounded-3xl flex items-center justify-center mx-auto mb-4 animate-bounce-slow">
                             <CheckCircle2 className="w-10 h-10 text-emerald-500" />
                         </div>
-                        <h3 className="font-black text-slate-900 text-lg mb-1">All Caught Up!</h3>
-                        <p className="text-slate-400 text-sm font-medium">You have no pending deliveries.</p>
+                        <h3 className="font-black text-slate-900 text-lg mb-1">All Clear!</h3>
+                        <p className="text-slate-400 text-sm font-medium">Ready for the next run. 🚀</p>
                     </div>
                 )}
             </div>

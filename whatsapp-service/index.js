@@ -23,6 +23,14 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+function logTrace(msg) {
+    try {
+        fs.appendFileSync('debug_trace.log', `${new Date().toISOString()} ${msg}\n`);
+    } catch (e) {
+        // ignore
+    }
+}
+
 // Log all requests
 app.use((req, res, next) => {
     console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
@@ -39,6 +47,7 @@ const PORT = process.env.PORT || 3001;
 
 // Configure axios for secure backend communication
 axios.defaults.headers.common['x-api-key'] = SERVICE_API_KEY;
+axios.defaults.timeout = 10000; // 10 seconds timeout
 
 // ============================================
 // CONSTANTS
@@ -231,10 +240,13 @@ async function initVendorWhatsApp(vendorId) {
                 // If client was removed (race condition), ignore updates
                 if (!client || client.sock !== sock) return;
 
+                logTrace(`[Vendor ${vendorId.substring(0, 8)}] Connection: ${connection} (hasQr: ${!!qr})`);
                 console.log(`[Vendor ${vendorId.substring(0, 8)}] Connection:`, { connection, hasQr: !!qr });
 
                 if (qr) {
                     client.qrCode = qr;
+                    logTrace(`[Vendor ${vendorId.substring(0, 8)}] QR Code received`);
+                    fs.writeFileSync(`qr_${vendorId.substring(0, 8)}.txt`, qr);
                     console.log(`\n--- VENDOR ${vendorId.substring(0, 8)} QR CODE ---`);
                     qrcode.generate(qr, { small: true });
                 }
@@ -282,13 +294,30 @@ async function initVendorWhatsApp(vendorId) {
 
             sock.ev.on('messages.upsert', async (m) => {
                 const { messages, type } = m;
-                if (type === 'notify') {
+                logTrace(`[Upsert] Event Type: ${type} Count: ${messages.length} Vendor: ${vendorId}`);
+
+                if (type === 'notify' || type === 'append') {
                     for (const message of messages) {
-                        if (!message.key.fromMe && message.message) {
+                        if (!message.message) {
+                            logTrace(`[Upsert] No content message from ${message.key.remoteJid}`);
+                            continue;
+                        }
+
+                        if (!message.key.fromMe) {
                             try {
+                                const isGroup = message.key.remoteJid.endsWith('@g.us');
+                                const fromMe = message.key.fromMe;
+                                const msgType = Object.keys(message.message || {})[0];
+
+                                if (!isGroup && !fromMe) {
+                                    logTrace(`[DIRECT_RAW] From: ${message.key.remoteJid} Type: ${msgType} Content: ${JSON.stringify(message.message).substring(0, 500)}`);
+                                }
+
+                                logTrace(`[Upsert] ${isGroup ? 'GROUP' : 'DIRECT'} Msg from ${message.key.remoteJid} Type: ${msgType} Vendor: ${vendorId}`);
                                 console.log(`[Vendor ${vendorId.substring(0, 8)}] Msg:`, message.key.remoteJid);
                                 await handleIncomingMessage(vendorId, message);
                             } catch (err) {
+                                logTrace(`[Error] Message handler error: ${err.message}`);
                                 console.error(`[Vendor ${vendorId.substring(0, 8)}] Message handler error:`, err);
                             }
                         }
@@ -485,20 +514,7 @@ async function getStaffNextDelivery(vendorId, staffId) {
     }
 }
 
-// Get staff's next pending delivery
-async function getStaffNextDelivery(vendorId, staffId) {
-    try {
-        const response = await axios.get(`${FASTAPI_URL}/api/delivery-staff/${staffId}/pending-orders`, {
-            params: { vendor_id: vendorId }
-        });
-        const orders = response.data;
-        // Return first unacknowledged order
-        return orders.find(o => !o.delivery_queue_acknowledged) || null;
-    } catch (error) {
-        console.error('[API] Error fetching staff orders:', error.message);
-        return null;
-    }
-}
+
 
 // ============================================
 // MESSAGE HANDLING
@@ -507,17 +523,21 @@ async function getStaffNextDelivery(vendorId, staffId) {
 async function handleIncomingMessage(vendorId, message) {
     try {
         const remoteJid = message.key.remoteJid;
+        logTrace(`[Incoming] RAW: ${remoteJid}`);
 
-        // Ignore group messages
+        // Ignore group messages and newsletters
         if (remoteJid.endsWith('@g.us')) return;
+        if (remoteJid.endsWith('@newsletter')) return;
 
-        const phoneNumber = remoteJid.replace('@s.whatsapp.net', '');
+        // Clean phone number for DB lookups (remove domain)
+        const phoneNumber = remoteJid.split('@')[0];
         const msgContent = message.message;
 
         // Use robust extraction
         const messageText = getMessageText(msgContent).trim();
 
-        console.log(`[${vendorId.substring(0, 8)}] From ${phoneNumber}: "${messageText}"`);
+        logTrace(`[Incoming] From ${phoneNumber}: "${messageText}"`);
+        console.log(`[Debug] Incoming from ${phoneNumber}: "${messageText}"`);
 
         if (!messageText && !msgContent.buttonsResponseMessage && !msgContent.listResponseMessage) {
             // Log full message for debugging if it's empty but has something
@@ -529,15 +549,31 @@ async function handleIncomingMessage(vendorId, message) {
 
         // Check if delivery staff
         const staffInfo = await checkIfDeliveryStaff(vendorId, phoneNumber);
+        logTrace(`[Debug] Staff check for ${phoneNumber}: ${staffInfo ? 'YES' : 'NO'}`);
+
         if (staffInfo && staffInfo.is_staff) {
-            await handleDeliveryStaffMessage(vendorId, phoneNumber, messageText, staffInfo);
-            return;
+            // Fix: Extract staff object correctly
+            const staffObj = staffInfo.staff || staffInfo;
+            // Try to handle as staff message first
+            const handled = await handleDeliveryStaffMessage(vendorId, remoteJid, messageText, staffObj);
+
+            // If handled (was a staff command like '1', '2', '3'), stop here
+            if (handled) {
+                logTrace(`[Incoming] Handled as staff command`);
+                return;
+            }
+            // If NOT handled (e.g., "Hi"), proceed to customer flow below
+            logTrace(`[Incoming] Staff number but not a command, falling back to customer`);
+            console.log(`[Validation] Staff message "${messageText}" not a command, falling back to customer flow`);
         }
 
+        logTrace(`[Incoming] Calling handleCustomerConversation...`);
+
         // Handle customer conversation
-        await handleCustomerConversation(vendorId, phoneNumber, messageText);
+        await handleCustomerConversation(vendorId, remoteJid, messageText);
 
     } catch (error) {
+        logTrace(`[Error] handleIncomingMessage: ${error.message}`);
         console.error('[Error] handleIncomingMessage:', error);
     }
 }
@@ -547,11 +583,12 @@ async function handleIncomingMessage(vendorId, message) {
 // Enhanced with structured responses
 // ============================================
 
-async function handleDeliveryStaffMessage(vendorId, phoneNumber, messageText, staffInfo) {
+async function handleDeliveryStaffMessage(vendorId, remoteJid, messageText, staffInfo) {
     const client = vendorClients.get(vendorId);
-    if (!client?.sock) return;
+    if (!client?.sock) return false;
 
-    const jid = `${phoneNumber}@s.whatsapp.net`;
+    const jid = remoteJid;
+    const phoneNumber = remoteJid.split('@')[0];
     const text = messageText.toLowerCase().trim();
 
     // Send helper function
@@ -561,18 +598,23 @@ async function handleDeliveryStaffMessage(vendorId, phoneNumber, messageText, st
 
     // Find staff's latest pending order
     let pendingOrder = null;
-    try {
-        const response = await axios.get(`${FASTAPI_URL}/api/delivery-staff/${staffInfo.staff_id}/orders`, {
-            params: {
-                vendor_id: vendorId,
-                status: 'pending'
+    const staff_id = staffInfo.staff_id || staffInfo.staff?.staff_id;
+
+    if (staff_id) {
+        try {
+            const response = await axios.get(`${FASTAPI_URL}/api/delivery-staff/${staff_id}/orders`, {
+                params: {
+                    vendor_id: vendorId,
+                    status: 'pending'
+                }
+            });
+            if (response.data && response.data.length > 0) {
+                pendingOrder = response.data[0];
             }
-        });
-        if (response.data && response.data.length > 0) {
-            pendingOrder = response.data[0];
+        } catch (error) {
+            logTrace(`[Staff] API Error for ${staff_id}: ${error.message}`);
+            console.error('[API] Error fetching staff orders:', error.message);
         }
-    } catch (error) {
-        console.error('[API] Error fetching staff orders:', error.message);
     }
 
     // Handle numeric responses for delivery completion
@@ -605,11 +647,12 @@ async function handleDeliveryStaffMessage(vendorId, phoneNumber, messageText, st
             if (result.trigger_customer_payment) {
                 await sendCustomerPaymentRequest(vendorId, pendingOrder.customer_phone, pendingOrder);
             }
+            return true; // Handled as staff command
 
         } catch (error) {
-            await send(`❌ Could not update order ${orderId}. Please try again.`);
+            await send(`❌ Error updating status: ${error.message}`);
+            return true; // Handled (even with error)
         }
-        return;
     }
 
     // Handle "done ORDER_ID" format
@@ -624,7 +667,7 @@ async function handleDeliveryStaffMessage(vendorId, phoneNumber, messageText, st
         } catch (error) {
             await send(`❌ Could not update ${orderId}`);
         }
-        return;
+        return true;
     }
 
     // Handle "paid ORDER_ID cash/upi" format
@@ -643,59 +686,69 @@ async function handleDeliveryStaffMessage(vendorId, phoneNumber, messageText, st
         } catch (error) {
             await send(`❌ Could not update ${orderId}`);
         }
-        return;
+        return true;
     }
 
-    // Show current order or help
-    if (pendingOrder) {
-        await send(
-            `🚚 *Current Delivery*\n\n` +
-            `Order: *${pendingOrder.order_id}*\n` +
-            `Customer: ${pendingOrder.customer_name}\n` +
-            `Phone: ${pendingOrder.customer_phone}\n` +
-            `Address: ${pendingOrder.customer_address}\n` +
-            `Items: ${pendingOrder.quantity} × ${pendingOrder.litre_size}L\n` +
-            `Amount: ₹${pendingOrder.amount}\n\n` +
-            `*Reply:*\n` +
-            `*1* - Delivered & Cash Paid\n` +
-            `*2* - Delivered & UPI Paid\n` +
-            `*3* - Delivered & Not Paid`
-        );
-    } else {
-        await send(
-            `📋 *Staff Commands:*\n\n` +
-            `• Reply *1/2/3* for current order\n` +
-            `• *done ORDER_ID* - Mark delivered\n` +
-            `• *paid ORDER_ID cash* - Mark paid\n\n` +
-            `No pending orders right now.`
-        );
+    // Explicit Help/Status command
+    if (['help', 'status', 'commands'].includes(text)) {
+        if (pendingOrder) {
+            await send(
+                `🚚 *Current Delivery*\n\n` +
+                `Order: *${pendingOrder.order_id}*\n` +
+                `Customer: ${pendingOrder.customer_name}\n` +
+                `Phone: ${pendingOrder.customer_phone}\n` +
+                `Address: ${pendingOrder.customer_address}\n` +
+                `Items: ${pendingOrder.quantity} × ${pendingOrder.litre_size}L\n` +
+                `Amount: ₹${pendingOrder.amount}\n\n` +
+                `*Reply:*\n` +
+                `*1* - Delivered & Cash Paid\n` +
+                `*2* - Delivered & UPI Paid\n` +
+                `*3* - Delivered & Not Paid`
+            );
+        } else {
+            await send(
+                `📋 *Staff Commands:*\n\n` +
+                `• Reply *1/2/3* for current order\n` +
+                `• *done ORDER_ID* - Mark delivered\n` +
+                `• *paid ORDER_ID cash* - Mark paid\n\n` +
+                `No pending orders right now.`
+            );
+        }
+        return true;
     }
+    // Not a staff command -> Fall through to customer flow
+    return false;
 }
 
-// Send payment request to customer after unpaid delivery
+// Send payment request to customer after unpaid delivery (REFINED)
 async function sendCustomerPaymentRequest(vendorId, customerPhone, order) {
     const client = vendorClients.get(vendorId);
     if (!client?.sock) return;
 
-    const jid = `${customerPhone}@s.whatsapp.net`;
+    const jid = customerPhone.includes('@') ? customerPhone : `${customerPhone}@s.whatsapp.net`;
 
-    // Store that we're waiting for payment response
-    const sessionKey = `${vendorId}:${customerPhone}`;
-    conversationState.set(sessionKey, {
-        step: STEPS.AWAITING_PAYMENT_CHOICE,
-        lastActivity: Date.now(),
-        data: { orderId: order.order_id, amount: order.amount }
-    });
+    // User requested: "Once the delivery boy marked as delivered only send deliverd to the customer, 
+    // if the payment is pending mention that only. other wise dont give any other option."
 
-    await client.sock.sendMessage(jid, {
-        text: `Hi 👋 Your water cans were delivered.\n\n` +
-            `Order: ${order.order_id}\n` +
-            `Amount: ₹${order.amount}\n\n` +
-            `Please confirm payment:\n\n` +
-            `*1* - Pay now via UPI\n` +
-            `*2* - Pay later in cash\n\n` +
-            `Reply with 1 or 2.`
-    });
+    let message = `Hi 👋 Your order ${order.order_id} has been delivered! 🚚\n\n`;
+
+    const isUnpaid = order.payment_status === 'pending' || order.payment_status === 'delivered_unpaid';
+
+    if (isUnpaid) {
+        message += `⏳ *Payment Status: Pending*\n` +
+            `Amount Due: ₹${order.amount}\n\n` +
+            `Please clear the payment with our staff or via UPI. Thank you! 🙏`;
+    } else {
+        message += `✅ *Payment Status: Paid*\n\n` +
+            `Thank you for choosing Thanni Canuuu! 💧`;
+    }
+
+    try {
+        await client.sock.sendMessage(jid, { text: message });
+        logTrace(`[Notification] Delivery notification sent to ${jid}`);
+    } catch (e) {
+        logTrace(`[Error] Failed to send delivery notification: ${e.message}`);
+    }
 }
 
 // ============================================
@@ -703,11 +756,12 @@ async function sendCustomerPaymentRequest(vendorId, customerPhone, order) {
 // Enhanced with smart follow-up handling
 // ============================================
 
-async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
+async function handleCustomerConversation(vendorId, remoteJid, messageText) {
     const client = vendorClients.get(vendorId);
     if (!client?.sock) return;
 
-    const jid = `${phoneNumber}@s.whatsapp.net`;
+    const jid = remoteJid;
+    const phoneNumber = remoteJid.split('@')[0];
     const sessionKey = `${vendorId}:${phoneNumber}`;
     const text = messageText.toLowerCase().trim();
 
@@ -717,13 +771,18 @@ async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
         lastActivity: Date.now(),
         data: {}
     };
+
     session.lastActivity = Date.now();
+    logTrace(`[Customer] Flow: ${sessionKey} Step: ${session.step} Text: "${text}"`);
 
     // Send helper function
     const send = async (msg) => {
         try {
+            logTrace(`[Outgoing] To ${jid}: "${msg.substring(0, 50)}..."`);
             await client.sock.sendMessage(jid, { text: msg });
+            logTrace(`[Outgoing] SENT successfully to ${jid}`);
         } catch (e) {
+            logTrace(`[Error] Send failed to ${jid}: ${e.message}`);
             console.error(`[Error] Send failed to ${jid}:`, e.message);
         }
     };
@@ -732,6 +791,7 @@ async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
     const prices = await getProductPrices(vendorId) || {};
     const price20L = prices['20L'] || 50;
     const price25L = prices['25L'] || 65;
+    logTrace(`[Customer] Prices fetched: 20L=₹${price20L}, 25L=₹${price25L}`);
 
     // ============================================
     // Handle payment response if waiting
@@ -822,7 +882,8 @@ async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
             conversationState.set(sessionKey, session);
             return;
         } else {
-            await send(`Please reply *1* for order status or *2* for new order.`);
+            const statusMsg = `Hi 👋 Welcome to Thanni Canuuu! 💧\n\nPlease reply *1* for order status or *2* for new order.`;
+            await send(statusMsg);
             conversationState.set(sessionKey, session);
             return;
         }
@@ -848,16 +909,16 @@ async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
                     session.step = STEPS.AWAITING_MENU_CHOICE;
 
                     const order = activeOrderInfo.order;
-                    await send(
-                        `Hi ${customer?.name || 'there'}! 👋\n\n` +
+                    const welcomeMsg =
+                        `Hi ${customer?.name || 'there'}! 👋 Welcome to Thanni Canuuu! 💧\n\n` +
                         `You have an active order:\n` +
                         `• ${order.quantity} × ${order.litre_size}L (₹${order.amount})\n` +
                         `• Status: ${order.status === 'pending' ? '⏳ In queue' : '🚚 On the way'}\n\n` +
                         `What would you like to do?\n\n` +
                         `*1* - Check my order status\n` +
                         `*2* - Place a new order\n\n` +
-                        `Reply with 1 or 2.`
-                    );
+                        `Reply with 1 or 2.`;
+                    await send(welcomeMsg);
                 } else if (customer && customer.name && customer.address) {
                     // Returning customer with no active order
                     session.data.customer = customer;
@@ -865,11 +926,11 @@ async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
                     session.data.address = customer.address;
                     session.step = STEPS.AWAITING_CAN_TYPE;
 
-                    await send(`Hi ${customer.name}! 👋 Welcome back!\n\nWhich can do you need?\n*20L* / *25L* / *Both*`);
+                    await send(`Hi ${customer.name}! 👋 Welcome to Thanni Canuuu! 💧\n\nWhich can do you need?\n*20L* / *25L* / *Both*`);
                 } else {
                     // New customer - ask name
                     session.step = STEPS.AWAITING_NAME;
-                    await send(`Hi 👋 Welcome!\n\nMay I know your name?`);
+                    await send(`Hi 👋 Welcome to Thanni Canuuu! 💧\n\nMay I know your name?`);
                 }
             }
             break;
@@ -966,8 +1027,18 @@ async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
             break;
 
         case STEPS.AWAITING_CONFIRM:
+            // Prevent duplicate processing if user sends YES multiple times
+            if (session.isCreatingOrder) {
+                logTrace(`[Customer] Duplicate confirm ignored for ${phoneNumber}`);
+                return;
+            }
+
             if (['yes', 'y', 'confirm', 'ok', 'haan', 'ha'].includes(text)) {
                 try {
+                    // Mark as processing to handle "Double Yes"
+                    session.isCreatingOrder = true;
+                    conversationState.set(sessionKey, session);
+
                     // Build order items
                     const items = [];
                     if (session.data.qty20L > 0) {
@@ -1013,17 +1084,24 @@ async function handleCustomerConversation(vendorId, phoneNumber, messageText) {
                 await send(`❌ Order cancelled.\n\nSend *Hi* to start again.`);
                 conversationState.delete(sessionKey);
             } else {
-                await send(`Reply *YES* to confirm or *NO* to cancel.`);
+                // Not YES/NO, re-confirm once
+                if (!session.confirmPromptSent) {
+                    await send(`Reply *YES* to confirm or *NO* to cancel.`);
+                    session.confirmPromptSent = true;
+                    conversationState.set(sessionKey, session);
+                }
             }
-            break;
+            return; // Don't fall through to IDLE
 
         default:
             session.step = STEPS.IDLE;
             await send(`Send *Hi* to place an order! 👋`);
     }
 
-    // Save session
-    conversationState.set(sessionKey, session);
+    // Save session (if not deleted/returned)
+    if (conversationState.has(sessionKey)) {
+        conversationState.set(sessionKey, session);
+    }
 }
 
 // ============================================

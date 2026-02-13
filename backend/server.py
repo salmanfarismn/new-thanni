@@ -537,6 +537,14 @@ async def get_company_name_for_vendor(vendor_id: Optional[str] = None) -> str:
 
 async def send_order_notification(order_id: str):
     """Send WhatsApp notification for a specific order"""
+    # DISABLED: Delivery staff now use the dashboard app.
+    # We mark it as sent to keep the state consistent but don't send actual msg.
+    await db.orders.update_one(
+        {"order_id": order_id},
+        {"$set": {"notification_status": "sent", "last_notification_error": None}}
+    )
+    return
+
     order = await db.orders.find_one({"order_id": order_id})
     if not order:
         logger.warning(f"Order {order_id} not found for notification")
@@ -745,6 +753,16 @@ async def get_active_delivery_staff_for_shift(vendor_id: Optional[str] = None):
     active_shifts = await db.delivery_shifts.find(shift_query).to_list(100)
     
     if not active_shifts:
+        # Fallback: If no shifts scheduled, try to find ANY active staff
+        # This prevents order failures if shifts aren't strictly managed
+        fallback_query = {"is_active": True}
+        if vendor_id:
+            fallback_query["vendor_id"] = vendor_id
+            
+        any_staff = await db.delivery_staff.find(fallback_query).sort("active_orders_count", 1).limit(1).to_list(1)
+        if any_staff:
+             return any_staff[0], "flexible"
+             
         return None, None
     
     staff_ids = [s['staff_id'] for s in active_shifts]
@@ -757,6 +775,17 @@ async def get_active_delivery_staff_for_shift(vendor_id: Optional[str] = None):
     
     if staff:
         return staff[0], shift
+        
+    # Double fallback if shifts exist but staff inactive?
+    # Reuse fallback logic
+    fallback_query = {"is_active": True}
+    if vendor_id:
+        fallback_query["vendor_id"] = vendor_id
+        
+    any_staff = await db.delivery_staff.find(fallback_query).sort("active_orders_count", 1).limit(1).to_list(1)
+    if any_staff:
+         return any_staff[0], "flexible"
+            
     return None, None
 
 async def get_price_for_litre(litre_size: int, vendor_id: Optional[str] = None):
@@ -1524,6 +1553,67 @@ async def confirm_payment(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@api_router.put("/orders/{order_id}/reassign")
+async def reassign_order(
+    order_id: str,
+    new_staff_id: str = Query(..., description="ID of the new delivery agent"),
+    vendor_id: str = Depends(get_current_vendor_id)
+):
+    """
+    Reassign an order to a different delivery agent.
+    Only vendor can reassign orders.
+    """
+    try:
+        # Find the order
+        order = await db.orders.find_one({"order_id": order_id, "vendor_id": vendor_id})
+        if not order:
+            raise HTTPException(status_code=404, detail="Order not found")
+        
+        # Only allow reassigning if not delivered or cancelled
+        if order.get('status') in [OrderStatus.DELIVERED, OrderStatus.CANCELLED]:
+             raise HTTPException(status_code=400, detail=f"Order in {order['status']} state cannot be reassigned")
+
+        # Find the new staff
+        new_staff = await db.delivery_staff.find_one({"staff_id": new_staff_id, "vendor_id": vendor_id})
+        if not new_staff:
+            raise HTTPException(status_code=404, detail="New delivery agent not found")
+        
+        old_staff_id = order.get('delivery_staff_id')
+        
+        # 1. Update the order
+        await db.orders.update_one(
+            {"order_id": order_id, "vendor_id": vendor_id},
+            {"$set": {
+                "delivery_staff_id": new_staff_id,
+                "delivery_staff_name": new_staff['name'],
+                "status": OrderStatus.ASSIGNED  # Reset to assigned
+            }}
+        )
+        
+        # 2. Update active_orders_count for old staff
+        if old_staff_id:
+            await db.delivery_staff.update_one(
+                {"staff_id": old_staff_id},
+                {"$inc": {"active_orders_count": -1}}
+            )
+            
+        # 3. Update active_orders_count for new staff
+        await db.delivery_staff.update_one(
+            {"staff_id": new_staff_id},
+            {"$inc": {"active_orders_count": 1}}
+        )
+        
+        logger.info(f"Order {order_id} reassigned to {new_staff['name']} ({new_staff_id}) by vendor {vendor_id}")
+        
+        return {"success": True, "message": f"Order reassigned to {new_staff['name']}"}
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error reassigning order: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ============================================
 # CUSTOMER STATE MANAGEMENT ENDPOINTS
 # ============================================
@@ -2000,108 +2090,8 @@ async def get_delivery_queue(
     }
 
 
-@api_router.post("/orders/create")
-async def create_multi_item_order(
-    order_req: MultiItemOrderRequest,
-    request: Request,
-    api_key: str = Depends(verify_service_api_key)
-):
-    """
-    Create orders from WhatsApp bot (supports multiple items).
-    Splits multi-item requests into individual order documents.
-    SECURED: Requires Service API Key.
-    """
-    try:
-        vendor_id = order_req.vendor_id
-        if not vendor_id:
-            raise HTTPException(status_code=400, detail="vendor_id is required")
-        
-        # 1. Validate and Check Stock for ALL items first
-        stock = await get_today_stock(vendor_id)
-        total_qty_needed = sum(item.quantity for item in order_req.items)
-        
-        if stock['available_stock'] < total_qty_needed:
-             raise HTTPException(
-                status_code=400, 
-                detail=f"Insufficient stock. Need {total_qty_needed}, have {stock['available_stock']}"
-            )
 
-        # 2. Get delivery staff
-        staff, shift = await get_active_delivery_staff_for_shift(vendor_id)
-        if not staff:
-             # Fallback: try to find ANY active staff if shift logic is too strict?
-             # For now, standard logic.
-             raise HTTPException(status_code=400, detail="No delivery staff available at this time.")
 
-        created_order_ids = []
-        total_amount_all = 0.0
-
-        # 3. Create Orders
-        for item in order_req.items:
-            order_id = f"ORD{datetime.now().strftime('%Y%m%d%H%M%S')}-{item.litre_size}"
-            # Add random suffix if creating multiple in same second
-            if len(order_req.items) > 1:
-                order_id += f"-{uuid.uuid4().hex[:4]}"
-            
-            amount = item.quantity * item.price_per_can
-            
-            order_data = {
-                "order_id": order_id,
-                "customer_phone": order_req.customer_phone,
-                "customer_name": order_req.customer_name,
-                "customer_address": order_req.customer_address,
-                "litre_size": item.litre_size,
-                "quantity": item.quantity,
-                "price_per_can": item.price_per_can,
-                "status": "pending",
-                "delivery_staff_id": staff['staff_id'],
-                "delivery_staff_name": staff['name'],
-                "vendor_id": vendor_id,
-                "payment_status": "pending",
-                "payment_method": None,
-                "amount": amount,
-                "shift_assigned": shift,
-                "created_at": datetime.now(timezone.utc).isoformat(),
-                "delivered_at": None,
-                "notification_status": "queued",
-                "notification_attempts": 0,
-                "last_notification_error": None
-            }
-            
-            await db.orders.insert_one(order_data)
-            created_order_ids.append(order_id)
-            total_amount_all += amount
-            
-            # Update stock
-            await db.stock.update_one(
-                {"date": stock['date'], "vendor_id": vendor_id},
-                {
-                    "$inc": {"available_stock": -item.quantity, "orders_count": 1},
-                    "$set": {"updated_at": datetime.now(timezone.utc).isoformat()}
-                }
-            )
-            
-            # Update staff count
-            await db.delivery_staff.update_one(
-                {"staff_id": staff['staff_id']},
-                {"$inc": {"active_orders_count": 1}}
-            )
-            
-            # Queue notification
-            await add_to_notification_queue(order_id)
-
-        return {
-            "success": True,
-            "order_id": ", ".join(created_order_ids), # Return comma separated for display
-            "total_amount": total_amount_all,
-            "message": f"Created {len(created_order_ids)} orders successfully"
-        }
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        logging.error(f"Error creating multi-item order: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @api_router.post("/orders")

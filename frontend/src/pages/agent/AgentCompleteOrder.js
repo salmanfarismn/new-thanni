@@ -28,7 +28,9 @@ export default function AgentCompleteOrder() {
     const fetchActiveOrders = useCallback(async () => {
         try {
             const res = await api.get('/agent/orders');
-            const orderList = res.data.orders || [];
+            const orderList = (res.data.orders || []).filter(o =>
+                o.status === 'assigned' || o.status === 'out_for_delivery'
+            );
             setOrders(orderList);
 
             // Auto-select order if orderId query param is present

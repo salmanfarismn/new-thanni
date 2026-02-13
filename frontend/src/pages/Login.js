@@ -168,8 +168,8 @@ export default function Login() {
                             type="button"
                             onClick={() => { setLoginRole('vendor'); setError(''); }}
                             className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all duration-200 ${loginRole === 'vendor'
-                                    ? 'bg-white text-slate-900 shadow-sm'
-                                    : 'text-slate-400 hover:text-slate-600'
+                                ? 'bg-white text-slate-900 shadow-sm'
+                                : 'text-slate-400 hover:text-slate-600'
                                 }`}
                         >
                             <Store className="w-4 h-4" />
@@ -179,8 +179,8 @@ export default function Login() {
                             type="button"
                             onClick={() => { setLoginRole('delivery_agent'); setError(''); }}
                             className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm transition-all duration-200 ${loginRole === 'delivery_agent'
-                                    ? 'bg-white text-slate-900 shadow-sm'
-                                    : 'text-slate-400 hover:text-slate-600'
+                                ? 'bg-white text-slate-900 shadow-sm'
+                                : 'text-slate-400 hover:text-slate-600'
                                 }`}
                         >
                             <Truck className="w-4 h-4" />
@@ -277,8 +277,8 @@ export default function Login() {
                             type="submit"
                             disabled={loading}
                             className={`w-full h-14 font-bold rounded-2xl shadow-xl transition-all active:scale-[0.98] disabled:opacity-70 disabled:cursor-not-allowed flex items-center justify-center gap-3 text-lg ${loginRole === 'delivery_agent'
-                                    ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20 hover:shadow-emerald-600/30'
-                                    : 'bg-slate-900 hover:bg-slate-800 text-white shadow-slate-900/20 hover:shadow-2xl hover:shadow-slate-900/30'
+                                ? 'bg-emerald-600 hover:bg-emerald-700 text-white shadow-emerald-600/20 hover:shadow-emerald-600/30'
+                                : 'bg-slate-900 hover:bg-slate-800 text-white shadow-slate-900/20 hover:shadow-2xl hover:shadow-slate-900/30'
                                 }`}
                         >
                             {loading ? (
@@ -309,7 +309,7 @@ export default function Login() {
                 </div>
 
                 {/* Footer for Mobile */}
-                <div className="absolute bottom-6 w-full text-center lg:hidden">
+                <div className="mt-8 mb-6 w-full text-center lg:hidden">
                     <p className="text-xs text-slate-400 font-medium">© 2026 Thanni Canuuu</p>
                 </div>
             </div>

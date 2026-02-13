@@ -145,7 +145,7 @@ export default function AgentReportDamage() {
     return (
         <div className="space-y-8 pb-24 animate-in fade-in slide-in-from-right-8 duration-500">
             {/* Header */}
-            <div className="flex items-center gap-4 pt-4 sticky top-0 bg-slate-50/80 backdrop-blur-md z-20 py-2 border-b border-white/50">
+            <div className="flex items-center gap-4 pt-4 pb-4 border-b border-slate-100 px-2">
                 <button
                     onClick={() => navigate('/agent/dashboard')}
                     className="w-10 h-10 rounded-full bg-white border border-slate-200 flex items-center justify-center text-slate-900 hover:bg-slate-50 transition-colors shadow-sm"
