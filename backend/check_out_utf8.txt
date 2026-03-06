@@ -1,0 +1,29 @@
+﻿==================================================
+DIAGNOSTIC REPORT FOR VENDOR: 69820583c9486dbe5be440d4
+==================================================
+
+[SECTION 0: CUSTOMER]
+Found Customer: Uday kumar | Address: 21/28, Thembavani St, Senthil Nagar, Annanur, Thirumullaivoyal, Chennai, Tamil Nadu 600062
+
+[SECTION 1: STOCK]
+Stock for 2026-03-03: Available=99, Total=100
+
+[SECTION 2: STAFF & SHIFTS]
+Current UTC hour: 8, Target Shift: morning
+Total Active Shifts found in DB: 1
+ - Shift: full_day, Staff Name: Jagan, Staff ID: DA94685780
+
+Looking for active staff members in delivery_staff collection...
+Total Active Staff in delivery_staff: 1
+ - Staff: Jagan, ID: DA94685780, Active Orders: 6
+
+[SECTION 4: RECENT ORDERS]
+Total orders found: 5
+ - Order ID: ORD20260303140534467, Status: pending, Total: 40.0, Customer: Uday kumar, Created: 2026-03-03T08:35:34.468731+00:00
+ - Order ID: ORD20260222174514556, Status: pending, Total: 200.0, Customer: Uday kumar, Created: 2026-02-22T12:15:14.556528+00:00
+ - Order ID: ORD20260222174514547, Status: pending, Total: 40.0, Customer: Uday kumar, Created: 2026-02-22T12:15:14.547514+00:00
+ - Order ID: ORD20260222174348512, Status: pending, Total: 40.0, Customer: hi, Created: 2026-02-22T12:13:48.512724+00:00
+ - Order ID: ORD20260221165259163, Status: pending, Total: 40.0, Customer: Test User, Created: 2026-02-21T11:22:59.163949+00:00
+
+[SECTION 3: EMULATION]
+SUCCESS: Would assign to Jagan

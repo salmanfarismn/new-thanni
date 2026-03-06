@@ -18,7 +18,7 @@ export default function Dashboard() {
   // Filter state
   const [salesData, setSalesData] = useState(null);
   const [salesLoading, setSalesLoading] = useState(false);
-  const [salesFilter, setSalesFilter] = useState('today');
+  const [salesFilter, setSalesFilter] = useState('all-time');
   const [customStartDate, setCustomStartDate] = useState(new Date().toISOString().split('T')[0]);
   const [customEndDate, setCustomEndDate] = useState(new Date().toISOString().split('T')[0]);
 
@@ -129,6 +129,10 @@ export default function Dashboard() {
         case 'month':
           const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
           startDate = monthStart.toISOString().split('T')[0];
+          endDate = today.toISOString().split('T')[0];
+          break;
+        case 'all-time':
+          startDate = '2000-01-01'; // Default long past date
           endDate = today.toISOString().split('T')[0];
           break;
         case 'custom':
@@ -299,7 +303,7 @@ export default function Dashboard() {
         </div>
 
         <div className="bg-white p-1.5 rounded-2xl flex flex-wrap md:flex-nowrap gap-1 border border-slate-100 shadow-sm w-full md:w-auto overflow-x-auto no-scrollbar">
-          {['today', 'week', 'month', 'custom'].map((p) => (
+          {['today', 'week', 'month', 'all-time', 'custom'].map((p) => (
             <button
               key={p}
               onClick={() => setSalesFilter(p)}
@@ -308,7 +312,7 @@ export default function Dashboard() {
                 : 'text-slate-400 hover:text-slate-600 hover:bg-slate-50'
                 }`}
             >
-              {p}
+              {p.replace('-', ' ')}
             </button>
           ))}
         </div>
@@ -336,7 +340,7 @@ export default function Dashboard() {
         <MetricCard
           icon={AlertCircle}
           label="Total Due"
-          value={`₹${salesData?.pending_payment_amount || 0}`}
+          value={`₹${salesData?.total_outstanding || 0}`}
           color="rose"
           onClick={() => navigate('/orders?payment=unpaid')}
         />
@@ -382,7 +386,7 @@ export default function Dashboard() {
                           <h4 className="font-bold text-slate-900 text-base leading-tight">{order.customer_name}</h4>
                           <div className="flex items-center gap-2 text-xs font-bold text-slate-400 mt-1">
                             <Clock size={12} className="text-slate-300" />
-                            {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                            {new Date(order.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })}, {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             <span className="w-1 h-1 rounded-full bg-slate-300"></span>
                             <span className={order.payment_status === 'paid' ? 'text-emerald-500' : 'text-amber-500'}>
                               {order.payment_status === 'paid' ? 'Paid' : 'Pending Pay'}

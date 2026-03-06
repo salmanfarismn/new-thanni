@@ -1,4 +1,4 @@
-from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header, UploadFile, File
+from fastapi import FastAPI, APIRouter, HTTPException, Query, Request, Depends, Header, UploadFile, File, WebSocket, WebSocketDisconnect
 import shutil
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
@@ -20,6 +20,10 @@ from collections import deque
 from bson import ObjectId
 
 import json
+
+# Real-time WebSocket and Push Notification services
+from ws_manager import ws_manager
+import notification_service
 
 class JSONFormatter(logging.Formatter):
     def format(self, record):
@@ -145,7 +149,7 @@ async def get_current_vendor_id(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
-    logger.info("Starting up HydroFlow backend...")
+    logger.info("Starting up Thanni Canuuu backend...")
     logger.info(f"Connected to MongoDB: {os.environ['DB_NAME']}")
 
     # Create database indexes for performance
@@ -156,15 +160,26 @@ async def lifespan(app: FastAPI):
         await db.orders.create_index([("created_at", -1)])
         await db.customers.create_index([("vendor_id", 1), ("phone_number", 1)], unique=True)
         await db.stock.create_index([("vendor_id", 1), ("date", 1)], unique=True)
-        await db.customer_states.create_index([("updated_at", 1)], expireAfterSeconds=3600)
-        await db.vendor_sessions.create_index([("vendor_id", 1), ("session_id", 1)])
+        await db.whatsapp_states.create_index([("vendor_id", 1), ("phone_number", 1)], unique=True)
+        await db.customer_states.create_index([("updated_at", 1)], expireAfterSeconds=7200)
+        # Additional indexes for multi-tenant performance
+        await db.damage_reports.create_index([("vendor_id", 1), ("created_at", -1)])
+        await db.price_settings.create_index([("vendor_id", 1), ("litre_size", 1)])
+        await db.delivery_staff.create_index([("vendor_id", 1), ("staff_id", 1)], unique=True)
+        await db.delivery_shifts.create_index([("vendor_id", 1), ("date", 1)])
+        await db.vendors.create_index([("phone", 1)], unique=True)
+        await db.orders.create_index([("vendor_id", 1), ("payment_status", 1)])
+        await db.fcm_tokens.create_index([("user_id", 1), ("vendor_id", 1)])
         logger.info("Database indexes created/verified successfully")
     except Exception as e:
         logger.warning(f"Index creation warning (may already exist): {e}")
 
+    # Initialize notification service with database
+    notification_service.set_database(db)
+
     yield
     # Shutdown
-    logger.info("Shutting down HydroFlow backend...")
+    logger.info("Shutting down Thanni Canuuu backend...")
     client.close()
 
 app = FastAPI(lifespan=lifespan)
@@ -220,10 +235,7 @@ SERVICE_API_KEY = os.environ.get('SERVICE_API_KEY')
 if not SERVICE_API_KEY:
     raise RuntimeError("CRITICAL: SERVICE_API_KEY environment variable is required. Set it in your .env file.")
 
-# Mount static files
-from fastapi.staticfiles import StaticFiles
-os.makedirs("static", exist_ok=True)
-app.mount("/static", StaticFiles(directory="static"), name="static")
+# Note: Static files already mounted at line 177 via _static_dir
 
 async def verify_service_api_key(x_api_key: str = Header(None)):
     """
@@ -242,6 +254,7 @@ async def verify_service_api_key(x_api_key: str = Header(None)):
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
+from middleware.security import sanitize_text, validate_phone_number, is_safe_input
 
 class SecureHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
@@ -283,6 +296,21 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecureHeadersMiddleware)
 app.add_middleware(RateLimitMiddleware)
+
+# ============================================
+# CORS CONFIGURATION
+# ============================================
+
+cors_origins_raw = os.environ.get("CORS_ORIGINS", "http://localhost:3000,http://localhost:8100,http://localhost:5173")
+cors_origins = [origin.strip() for origin in cors_origins_raw.split(",")]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 class PriceSetting(BaseModel):
     litre_size: int
@@ -670,9 +698,11 @@ async def send_whatsapp_message(phone_number: str, message: str, vendor_id: Opti
         
         # Fallback to Baileys service (Multi-Vendor)
         async with httpx.AsyncClient() as client:
+            headers = {"x-api-key": SERVICE_API_KEY}
             url = f"{WHATSAPP_SERVICE_URL}/send/{vendor_id}" if vendor_id else f"{WHATSAPP_SERVICE_URL}/send"
             response = await client.post(
                 url,
+                headers=headers,
                 json={"to": normalized_phone, "message": message},
                 timeout=10.0
             )
@@ -709,13 +739,22 @@ async def send_whatsapp_buttons(phone_number: str, body_text: str, buttons: list
         logging.error(f"Failed to send WhatsApp buttons: {e}")
         return {"success": False, "error": str(e)}
 
-async def get_or_create_customer(phone_number: str, name: str = None, address: str = None):
-    customer = await db.customers.find_one({"phone_number": phone_number})
+async def get_or_create_customer(phone_number: str, name: str = None, address: str = None, vendor_id: str = None):
+    """Get or create a customer, scoped by vendor_id for multi-tenant isolation."""
+    if not vendor_id:
+        logging.warning(f"SECURITY: get_or_create_customer called without vendor_id for {phone_number}")
+    
+    query = {"phone_number": phone_number}
+    if vendor_id:
+        query["vendor_id"] = vendor_id
+    
+    customer = await db.customers.find_one(query)
     if not customer:
         customer_data = {
             "phone_number": phone_number,
             "name": name or "Customer",
             "address": address or "Not provided",
+            "vendor_id": vendor_id,
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         await db.customers.insert_one(customer_data)
@@ -845,69 +884,44 @@ async def verify_whatsapp_webhook(request: Request):
 
 @api_router.post("/whatsapp/webhook")
 async def receive_whatsapp_webhook(request: Request):
-    """Handle incoming WhatsApp messages via webhook"""
-    try:
-        body = await request.json()
-        logging.info(f"Received webhook: {body}")
-        
-        # Extract message data
-        message_data = whatsapp_api.extract_message_data(body)
-        
-        if not message_data:
-            return {"status": "ok"}
-        
-        # Mark message as read
-        await whatsapp_api.mark_message_as_read(message_data["message_id"])
-        
-        # Process the message
-        await handle_whatsapp_message_webhook(message_data)
-        
-        return {"status": "ok", "processed": True}
-    
-    except Exception as e:
-        logging.error(f"Error processing webhook: {e}")
-        return {"status": "error", "message": str(e)}
+    """
+    [DEPRECATED] Legacy WhatsApp webhook — disabled for security.
+    All WhatsApp message processing now happens through whatsapp-service/index.js
+    which properly handles vendor_id isolation per-session.
+    """
+    logging.warning("SECURITY: Legacy /whatsapp/webhook POST called — blocked. Use whatsapp-service instead.")
+    return {"status": "deprecated", "message": "This endpoint is deprecated. WhatsApp messages are handled by the WhatsApp service."}
 
 async def handle_whatsapp_message_webhook(message_data: dict):
-    """Process incoming WhatsApp message and send response"""
-    try:
-        phone_number = message_data["from"]
-        message_text = message_data["text"].strip().lower()
-        button_id = message_data.get("button_id")
-        
-        # If it's a button response, use button_id as message
-        if button_id:
-            message_text = button_id.lower()
-        
-        logging.info(f"Processing message from {phone_number}: {message_text}")
-        
-        response = await process_customer_message(phone_number, message_text)
-        
-        return response
-    
-    except Exception as e:
-        logging.error(f"Error in webhook message handler: {e}")
-        return None
+    """[DEPRECATED] Legacy handler — blocked for security (no vendor_id isolation)."""
+    logging.warning("SECURITY: Legacy handle_whatsapp_message_webhook called — blocked.")
+    return None
 
 async def process_customer_message(phone_number: str, message_text: str):
-    """Process customer or delivery boy message"""
-    # Check if it's a delivery boy
-    delivery_person = await db.delivery_staff.find_one({"phone_number": phone_number})
-    
-    if delivery_person:
-        return await handle_delivery_boy_message(phone_number, message_text, delivery_person)
-    else:
-        return await handle_customer_message(phone_number, message_text)
+    """[DEPRECATED] Legacy message router — blocked for security (no vendor_id isolation)."""
+    logging.warning(f"SECURITY: Legacy process_customer_message called for {phone_number} — blocked. No vendor_id scope.")
+    return None
 
 async def handle_customer_message(phone_number: str, message_text: str):
-    """Handle customer order flow"""
+    """[DEPRECATED] Legacy customer message handler — blocked for security.
+    This function previously handled customer orders without vendor_id isolation,
+    allowing potential cross-vendor data leakage. All customer interactions
+    are now handled by whatsapp-service/index.js which scopes every action
+    to a specific vendor_id.
+    """
+    logging.warning(f"SECURITY: Legacy handle_customer_message called for {phone_number} — blocked.")
+    return None
+
+
+async def _deprecated_handle_customer_message(phone_number: str, message_text: str):
+    """[DEAD CODE — preserved for reference only. DO NOT CALL.]"""
     try:
         if any(word in message_text for word in ['hi', 'hello', 'water', 'order']):
             customer = await get_or_create_customer(phone_number)
             if customer.get('name') == 'Customer' or customer.get('address') == 'Not provided':
                 await send_whatsapp_message(
                     phone_number,
-                    "Welcome to HydroFlow! 💧\n\nTo place an order, please share:\n1. Your Name\n2. Your Address\n\nExample: My name is John, address is 123 Main St"
+                    "Welcome to Thanni Canuuu! 💧\n\nTo place an order, please share:\n1. Your Name\n2. Your Address\n\nExample: My name is John, address is 123 Main St"
                 )
             else:
                 stock = await get_today_stock()
@@ -1087,7 +1101,16 @@ async def handle_customer_message(phone_number: str, message_text: str):
         )
 
 async def handle_delivery_boy_message(phone_number: str, message_text: str, delivery_person: dict):
-    """Handle delivery boy status updates"""
+    """[DEPRECATED] Legacy delivery boy handler — blocked for security.
+    This function previously updated orders without vendor_id scoping.
+    All delivery staff interactions are now handled by whatsapp-service/index.js.
+    """
+    logging.warning(f"SECURITY: Legacy handle_delivery_boy_message called for {phone_number} — blocked.")
+    return None
+
+
+async def _deprecated_handle_delivery_boy_message(phone_number: str, message_text: str, delivery_person: dict):
+    """[DEAD CODE — preserved for reference only. DO NOT CALL.]"""
     try:
         # Find latest pending order for this delivery person
         pending_orders = await db.orders.find({
@@ -1209,45 +1232,59 @@ async def handle_delivery_boy_message(phone_number: str, message_text: str, deli
 
 @api_router.post("/whatsapp/message", response_model=MessageResponse)
 async def handle_whatsapp_message_legacy(message_data: IncomingMessage):
-    """Legacy endpoint for backward compatibility"""
-    try:
-        phone_number = message_data.phone_number
-        message_text = message_data.message.strip().lower()
-
-        await process_customer_message(phone_number, message_text)
-        
-        return MessageResponse(reply="Message processed", success=True)
-
-    except Exception as e:
-        logging.error(f"Error processing message: {e}")
-        return MessageResponse(
-            reply="Sorry, something went wrong. Please try again.",
-            success=False
-        ) 
+    """[DEPRECATED] Legacy WhatsApp message endpoint — blocked for security."""
+    logging.warning(f"SECURITY: Legacy /whatsapp/message POST called for {message_data.phone_number} — blocked.")
+    return MessageResponse(
+        reply="This endpoint is deprecated. Messages are handled by the WhatsApp service.",
+        success=False
+    ) 
 
 @api_router.get("/dashboard/metrics")
+@api_router.get("/dashboard/stats")
 async def get_dashboard_metrics(vendor_id: str = Depends(get_current_vendor_id)):
     """
-    Get dashboard metrics for the authenticated vendor.
-    SECURITY: Only returns metrics for orders belonging to this vendor.
+    Get comprehensive dashboard metrics for the authenticated vendor.
+    Combines today's operational metrics with historical revenue data.
     """
-    today = date.today().isoformat()
-    
-    # Get stock for this vendor
+    # 1. Stock
     stock = await get_today_stock(vendor_id)
     
-    # CRITICAL: Filter orders by vendor_id for data isolation
-    orders = await db.orders.find({"vendor_id": vendor_id}).to_list(10000)
+    # 2. Lifetime Revenue
+    pipeline = [
+        {"$match": {"vendor_id": vendor_id, "payment_status": {"$in": ["paid", "paid_cash", "paid_upi"]}}},
+        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
+    ]
+    revenue_result = await db.orders.aggregate(pipeline).to_list(1)
+    lifetime_revenue = revenue_result[0]['total'] if revenue_result else 0
+    
+    # 3. Today's metrics range
+    ist_offset = timedelta(hours=5, minutes=30)
+    now_ist = datetime.now(timezone.utc) + ist_offset
+    today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = (today_start_ist - ist_offset).isoformat()
+
+    # Get orders relevant for today's view
+    orders = await db.orders.find({
+        "vendor_id": vendor_id,
+        "$or": [
+            {"created_at": {"$gte": today_start_utc}},
+            {"delivered_at": {"$gte": today_start_utc}},
+            {"status": {"$nin": ["delivered", "cancelled"]}}
+        ]
+    }).to_list(10000)
     
     total_orders = len(orders)
-    delivered_orders = len([o for o in orders if o['status'] == 'delivered'])
-    pending_orders = len([o for o in orders if o['status'] == 'pending'])
+    delivered_orders = len([o for o in orders if o['status'] == 'delivered' and (o.get('delivered_at', '') >= today_start_utc)])
+    pending_orders = len([o for o in orders if o['status'] in ['pending', 'assigned', 'out_for_delivery', 'in_queue']])
     
     total_cans = sum(o['quantity'] for o in orders)
-    delivered_cans = sum(o['quantity'] for o in orders if o['status'] == 'delivered')
+    delivered_cans = sum(o['quantity'] for o in orders if o['status'] == 'delivered' and (o.get('delivered_at', '') >= today_start_utc))
     
-    paid_orders = [o for o in orders if o['payment_status'] == 'paid']
-    total_revenue = sum(o['amount'] for o in paid_orders)
+    # Revenue is only for deliveries made TODAY
+    paid_today = [o for o in orders if o['payment_status'] in ['paid', 'paid_cash', 'paid_upi'] and (o.get('delivered_at', '') >= today_start_utc)]
+    today_revenue = sum(o['amount'] for o in paid_today)
+    
+    # Pending payment for currently active/delivered orders
     pending_payment = sum(o['amount'] for o in orders if o['payment_status'] == 'pending')
     
     return {
@@ -1256,7 +1293,8 @@ async def get_dashboard_metrics(vendor_id: str = Depends(get_current_vendor_id))
         "pending_orders": pending_orders,
         "total_cans": total_cans,
         "delivered_cans": delivered_cans,
-        "total_revenue": total_revenue,
+        "today_revenue": today_revenue,
+        "total_revenue": lifetime_revenue,
         "pending_payment": pending_payment,
         "available_stock": stock['available_stock'],
         "total_stock": stock['total_stock']
@@ -1291,12 +1329,24 @@ async def get_dashboard_sales(
         start_utc = datetime.combine(start_dt.date() - timedelta(days=1), dt_time(18, 30, 0))
         end_utc = datetime.combine(end_dt.date(), dt_time(18, 29, 59))
         
+        # Query: Orders created OR delivered in the selected range
+        # This ensures revenue for old orders delivered TODAY is counted
         query = {
             "vendor_id": vendor_id,
-            "created_at": {
-                "$gte": start_utc.isoformat(),
-                "$lte": end_utc.isoformat()
-            }
+            "$or": [
+                {
+                    "created_at": {
+                        "$gte": start_utc.isoformat(),
+                        "$lte": end_utc.isoformat()
+                    }
+                },
+                {
+                    "delivered_at": {
+                        "$gte": start_utc.isoformat(),
+                        "$lte": end_utc.isoformat()
+                    }
+                }
+            ]
         }
         
         orders = await db.orders.find(query).to_list(10000)
@@ -1306,8 +1356,8 @@ async def get_dashboard_sales(
         total_cans_sold = sum(o.get('quantity', 0) for o in orders)
         empty_cans_collected = sum(o.get('empty_cans_collected', 0) for o in orders)
         
-        # Revenue Breakdown
-        paid_orders = [o for o in orders if o.get('payment_status') == 'paid']
+        # Revenue Breakdown (Include all paid variants)
+        paid_orders = [o for o in orders if o.get('payment_status') in ['paid', 'paid_cash', 'paid_upi']]
         total_revenue = sum(o.get('amount', 0) for o in paid_orders)
         total_order_value = sum(o.get('amount', 0) for o in orders)
         
@@ -1316,9 +1366,9 @@ async def get_dashboard_sales(
         pending_orders = len([o for o in orders if o.get('status') == 'pending'])
         
         # Payment Breakdown
-        upi_pending_orders = [o for o in orders if o.get('payment_status') == PaymentStatus.UPI_PENDING]
-        cash_due_orders = [o for o in orders if o.get('payment_status') == PaymentStatus.CASH_DUE]
-        delivered_unpaid_orders = [o for o in orders if o.get('payment_status') == PaymentStatus.DELIVERED_UNPAID]
+        upi_pending_orders = [o for o in orders if o.get('payment_status') in ['upi_pending', 'UPI_PENDING']]
+        cash_due_orders = [o for o in orders if o.get('payment_status') in ['cash_due', 'CASH_DUE']]
+        delivered_unpaid_orders = [o for o in orders if o.get('payment_status') in ['delivered_unpaid', 'DELIVERED_UNPAID']]
         
         upi_pending_amount = sum(o.get('amount', 0) for o in upi_pending_orders)
         cash_due_amount = sum(o.get('amount', 0) for o in cash_due_orders)
@@ -1327,8 +1377,13 @@ async def get_dashboard_sales(
         pending_payment_orders = [o for o in orders if o.get('payment_status') == 'pending']
         pending_payment_amount = sum(o.get('amount', 0) for o in pending_payment_orders)
         
-        # Total Outstanding
-        total_outstanding = upi_pending_amount + cash_due_amount + delivered_unpaid_amount + pending_payment_amount
+        # Total Outstanding (Lifetime)
+        unpaid_lifetime_query = {
+            "vendor_id": vendor_id,
+            "payment_status": {"$in": ["pending", "upi_pending", "cash_due", "delivered_unpaid", "UPI_PENDING", "CASH_DUE", "DELIVERED_UNPAID"]}
+        }
+        all_unpaid = await db.orders.find(unpaid_lifetime_query, {"amount": 1}).to_list(10000)
+        total_outstanding = sum(o.get('amount', 0) for o in all_unpaid)
         
         return {
             "start_date": start_date,
@@ -1540,6 +1595,20 @@ async def confirm_payment(
         
         # Fetch updated order
         updated_order = await db.orders.find_one({"order_id": order_id}, {"_id": 0})
+
+        # Emit real-time payment update event
+        agent_id = updated_order.get("delivery_staff_id") if updated_order else None
+        asyncio.create_task(ws_manager.broadcast_event(
+            vendor_id=vendor_id,
+            event_type="payment_update",
+            data={
+                "order_id": order_id,
+                "payment_status": payment_status,
+                "customer_name": updated_order.get("customer_name", "") if updated_order else "",
+                "amount": updated_order.get("amount", 0) if updated_order else 0,
+            },
+            target_agent_id=agent_id
+        ))
         
         return {
             "success": True,
@@ -1621,7 +1690,8 @@ async def reassign_order(
 @api_router.get("/customers/{phone_number}/state")
 async def get_customer_state(
     phone_number: str,
-    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service")
+    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service"),
+    api_key: str = Depends(verify_service_api_key)
 ):
     """
     Get customer conversation state for WhatsApp flow.
@@ -1659,7 +1729,8 @@ async def get_customer_state(
 async def update_customer_state(
     phone_number: str,
     state_update: CustomerStateUpdate,
-    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service")
+    vendor_id: Optional[str] = Query(None, description="Vendor ID for WhatsApp service"),
+    api_key: str = Depends(verify_service_api_key)
 ):
     """
     Update customer conversation state.
@@ -2015,10 +2086,23 @@ async def get_orders(
         query['status'] = status
     if staff_id:
         query['delivery_staff_id'] = staff_id
-    if date_filter:
-        query['created_at'] = {"$regex": f"^{date_filter}"}
-    if delivery_date:
-        query['delivery_date'] = delivery_date
+    
+    # Refresh Logic: If no specific date filter, show today's work + carryover
+    if not date_filter and not delivery_date:
+        ist_offset = timedelta(hours=5, minutes=30)
+        today_utc = (datetime.now(timezone.utc) + ist_offset).replace(hour=0, minute=0, second=0, microsecond=0) - ist_offset
+        today_str = today_utc.isoformat()
+        
+        query["$or"] = [
+            {"created_at": {"$gte": today_str}},
+            {"delivered_at": {"$gte": today_str}},
+            {"status": {"$nin": ["delivered", "cancelled"]}}
+        ]
+    else:
+        if date_filter:
+            query['created_at'] = {"$regex": f"^{date_filter}"}
+        if delivery_date:
+            query['delivery_date'] = delivery_date
     
     # Get orders - filtered by vendor_id
     orders = await db.orders.find(query, {"_id": 0}).sort("created_at", -1).to_list(1000)
@@ -2203,6 +2287,28 @@ async def create_order_directly(
 
         # 7. Add to notification queue (processed in background)
         await add_to_notification_queue(order_id)
+
+        # 8. Emit real-time WebSocket event
+        asyncio.create_task(ws_manager.broadcast_event(
+            vendor_id=vendor_id,
+            event_type="new_order",
+            data={
+                "order_id": order_id,
+                "customer_name": order_data.get("customer_name", ""),
+                "quantity": quantity,
+                "amount": total_amount,
+                "status": "assigned",
+                "delivery_staff": staff['name'],
+            },
+            target_agent_id=staff['staff_id']
+        ))
+
+        # 9. Send push notifications
+        asyncio.create_task(notification_service.notify_new_order(
+            order=order_data,
+            vendor_id=vendor_id,
+            agent_id=staff['staff_id']
+        ))
 
         return {
             "success": True, 
@@ -2466,27 +2572,7 @@ async def record_damaged_cans(
 # DASHBOARD ENDPOINTS
 # ============================================
 
-@api_router.get("/dashboard/metrics")
-async def get_dashboard_metrics(vendor_id: str = Depends(get_current_vendor_id)):
-    """
-    Get live metrics for dashboard.
-    """
-    # 1. Stock
-    stock = await get_today_stock(vendor_id)
-    
-    # 2. Lifetime Revenue
-    pipeline = [
-        {"$match": {"vendor_id": vendor_id}},
-        {"$group": {"_id": None, "total": {"$sum": "$amount"}}}
-    ]
-    revenue_result = await db.orders.aggregate(pipeline).to_list(1)
-    total_revenue = revenue_result[0]['total'] if revenue_result else 0
-    
-    return {
-        "available_stock": stock['available_stock'],
-        "total_stock": stock['total_stock'],
-        "total_revenue": total_revenue
-    }
+# Note: get_dashboard_metrics moved to line 1242 for better organization.
 
 @api_router.get("/stock/damage")
 async def get_damage_history(
@@ -2558,7 +2644,8 @@ async def get_today_damage(vendor_id: str = Depends(get_current_vendor_id)):
 async def get_staff_orders_service(
     staff_id: str,
     status: Optional[str] = Query(None),
-    vendor_id: Optional[str] = Query(None)
+    vendor_id: Optional[str] = Query(None),
+    api_key: str = Depends(verify_service_api_key)
 ):
     """
     Service endpoint for WhatsApp to fetch staff orders.
@@ -2580,7 +2667,8 @@ async def get_staff_orders_service(
 async def complete_delivery_service(
     order_id: str,
     vendor_id: Optional[str] = Query(None),
-    payment_status: Optional[str] = Query(None)
+    payment_status: Optional[str] = Query(None),
+    api_key: str = Depends(verify_service_api_key)
 ):
     """
     Complete delivery from WhatsApp service.
@@ -2766,7 +2854,8 @@ async def reset_agent_pin(
 @api_router.get("/delivery-staff/check/{phone_number}")
 async def check_if_delivery_staff(
     phone_number: str,
-    vendor_id: Optional[str] = Query(None)
+    vendor_id: Optional[str] = Query(None),
+    api_key: str = Depends(verify_service_api_key)
 ):
     """
     Check if a phone number belongs to delivery staff.
@@ -3064,7 +3153,13 @@ async def create_customer(
     Create a new customer for the authenticated vendor.
     SECURITY: Auto-assigns vendor_id from JWT - never from request body.
     """
-    phone = customer_data.phone_number.strip()
+    phone = validate_phone_number(customer_data.phone_number)
+    if not phone:
+        raise HTTPException(status_code=400, detail="Invalid phone number format")
+    
+    # Sanitize name and address
+    name = sanitize_text(customer_data.name)
+    address = sanitize_text(customer_data.address)
     
     # Check if customer already exists FOR THIS VENDOR
     existing = await db.customers.find_one({"phone_number": phone, "vendor_id": vendor_id})
@@ -3073,8 +3168,8 @@ async def create_customer(
         await db.customers.update_one(
             {"phone_number": phone, "vendor_id": vendor_id},
             {"$set": {
-                "name": customer_data.name,
-                "address": customer_data.address,
+                "name": name,
+                "address": address,
                 "updated_at": datetime.now(timezone.utc).isoformat()
             }}
         )
@@ -3084,8 +3179,8 @@ async def create_customer(
     # Create new customer with vendor_id from JWT (NEVER from request body)
     customer = {
         "phone_number": phone,
-        "name": customer_data.name,
-        "address": customer_data.address,
+        "name": name,
+        "address": address,
         "vendor_id": vendor_id,  # SECURITY: Assigned from JWT token
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -3133,7 +3228,7 @@ async def update_customer(
 # ============================================
 
 @api_router.get("/customers/lookup/{phone_number}")
-async def lookup_customer_for_whatsapp(phone_number: str, vendor_id: Optional[str] = None):
+async def lookup_customer_for_whatsapp(phone_number: str, vendor_id: Optional[str] = None, api_key: str = Depends(verify_service_api_key)):
     """
     Lookup customer by phone number (for WhatsApp bot).
     If vendor_id is provided, filter by vendor. Otherwise return first match.
@@ -3165,7 +3260,7 @@ class WhatsAppCustomerCreate(BaseModel):
     vendor_id: Optional[str] = None  # Optional for WhatsApp orders
 
 @api_router.post("/customers/whatsapp")
-async def create_customer_from_whatsapp(data: WhatsAppCustomerCreate):
+async def create_customer_from_whatsapp(data: WhatsAppCustomerCreate, api_key: str = Depends(verify_service_api_key)):
     """
     Create/update customer from WhatsApp bot.
     This is a service-to-service endpoint used by the WhatsApp service.
@@ -3205,8 +3300,60 @@ async def create_customer_from_whatsapp(data: WhatsAppCustomerCreate):
     customer.pop("_id", None)
     return customer
 
+@api_router.get("/whatsapp/state/{phone_number}")
+async def get_whatsapp_state(
+    phone_number: str, 
+    vendor_id: str = Query(...), 
+    api_key: str = Depends(verify_service_api_key)
+):
+    """Get WhatsApp conversation state for a specific customer/vendor."""
+    state_doc = await db.whatsapp_states.find_one(
+        {"phone_number": phone_number, "vendor_id": vendor_id},
+        {"_id": 0}
+    )
+    if not state_doc:
+        return {"step": "IDLE", "data": {}, "last_activity": datetime.now(timezone.utc).isoformat()}
+    return state_doc
+
+@api_router.post("/whatsapp/state/{phone_number}")
+async def update_whatsapp_state(
+    phone_number: str,
+    request: Request,
+    api_key: str = Depends(verify_service_api_key)
+):
+    """Update WhatsApp conversation state for a specific customer/vendor."""
+    data = await request.json()
+    vendor_id = data.get("vendor_id")
+    if not vendor_id:
+        raise HTTPException(status_code=400, detail="vendor_id is required")
+
+    state_update = {
+        "step": data.get("step", "IDLE"),
+        "data": data.get("data", {}),
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+        "phone_number": phone_number,
+        "vendor_id": vendor_id
+    }
+
+    await db.whatsapp_states.update_one(
+        {"phone_number": phone_number, "vendor_id": vendor_id},
+        {"$set": state_update},
+        upsert=True
+    )
+    return {"success": True, "state": state_update}
+
+@api_router.delete("/whatsapp/state/{phone_number}")
+async def clear_whatsapp_state(
+    phone_number: str, 
+    vendor_id: str = Query(...), 
+    api_key: str = Depends(verify_service_api_key)
+):
+    """Clear WhatsApp state after order completion or timeout."""
+    await db.whatsapp_states.delete_one({"phone_number": phone_number, "vendor_id": vendor_id})
+    return {"success": True}
+
 @api_router.get("/products/prices")
-async def get_product_prices():
+async def get_product_prices(api_key: str = Depends(verify_service_api_key)):
     """Get current prices for all products"""
     prices = {}
     
@@ -3245,7 +3392,7 @@ async def check_inventory(
     }
 
 @api_router.post("/orders/create")
-async def create_multi_item_order(order_req: MultiItemOrderRequest):
+async def create_multi_item_order(order_req: MultiItemOrderRequest, api_key: str = Depends(verify_service_api_key)):
     """
     Create a new order with multiple items (used by WhatsApp bot).
     vendor_id should be passed in the request body from WhatsApp service.
@@ -3254,7 +3401,7 @@ async def create_multi_item_order(order_req: MultiItemOrderRequest):
         phone_number = order_req.customer_phone
         vendor_id = order_req.vendor_id  # Get vendor_id from request
         
-        logger.info(f"Creating multi-item order for vendor: {vendor_id}, customer: {phone_number}")
+        logger.info(f"[OrderAPI] Init: vendor={vendor_id}, customer={phone_number}, address='{order_req.customer_address}', items={len(order_req.items)}")
         
         # Use provided delivery date or default to today
         if order_req.delivery_date:
@@ -3265,6 +3412,8 @@ async def create_multi_item_order(order_req: MultiItemOrderRequest):
         # Calculate total quantity and amount
         total_quantity = sum(item.quantity for item in order_req.items)
         total_amount = sum(item.quantity * item.price_per_can for item in order_req.items)
+        
+        logger.info(f"[OrderAPI] Totals: qty={total_quantity}, amount={total_amount}")
         
         # Check stock only for today's orders (filtered by vendor)
         if not order_req.is_tomorrow_order:
@@ -3297,8 +3446,11 @@ async def create_multi_item_order(order_req: MultiItemOrderRequest):
         
         # Assign delivery staff (filtered by vendor)
         staff, shift = await get_active_delivery_staff_for_shift(vendor_id)
+        logger.info(f"[OrderAPI] Staff found: {staff.get('name') if staff else 'NONE'}, shift={shift}")
+        
         if not staff and not order_req.is_tomorrow_order:
             # For tomorrow's orders, we'll assign staff later
+            logger.warning(f"[OrderAPI] FAILED: No staff available for vendor {vendor_id}")
             raise HTTPException(status_code=400, detail="No delivery staff available for this shift.")
         
         # Create individual orders for each item size
@@ -3595,17 +3747,42 @@ async def disconnect_whatsapp(vendor_id: str = Depends(get_current_vendor_id)):
     """Disconnect WhatsApp for this vendor"""
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{WHATSAPP_SERVICE_URL}/disconnect/{vendor_id}", timeout=10.0)
+            headers = {"x-api-key": SERVICE_API_KEY}
+            response = await client.post(
+                f"{WHATSAPP_SERVICE_URL}/disconnect/{vendor_id}", 
+                headers=headers,
+                timeout=10.0
+            )
             return response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to disconnect WhatsApp: {str(e)}")
+
+@api_router.post("/whatsapp/reset")
+async def reset_whatsapp(vendor_id: str = Depends(get_current_vendor_id)):
+    """Force reset WhatsApp session (wipes folder) for this vendor"""
+    try:
+        async with httpx.AsyncClient() as client:
+            headers = {"x-api-key": SERVICE_API_KEY}
+            response = await client.post(
+                f"{WHATSAPP_SERVICE_URL}/reset/{vendor_id}", 
+                headers=headers,
+                timeout=15.0
+            )
+            return response.json()
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to reset WhatsApp: {str(e)}")
 
 @api_router.post("/whatsapp/reconnect")
 async def reconnect_whatsapp(vendor_id: str = Depends(get_current_vendor_id)):
     """Reconnect WhatsApp for this vendor"""
     try:
         async with httpx.AsyncClient() as client:
-            response = await client.post(f"{WHATSAPP_SERVICE_URL}/reconnect/{vendor_id}", timeout=10.0)
+            headers = {"x-api-key": SERVICE_API_KEY}
+            response = await client.post(
+                f"{WHATSAPP_SERVICE_URL}/reconnect/{vendor_id}", 
+                headers=headers,
+                timeout=10.0
+            )
             return response.json()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to reconnect WhatsApp: {str(e)}")
@@ -3613,14 +3790,16 @@ async def reconnect_whatsapp(vendor_id: str = Depends(get_current_vendor_id)):
 @api_router.post("/whatsapp/send-test")
 async def send_test_message(
     phone: str, 
-    message: str = "Hello from HydroFlow! This is a test message.",
+    message: str = "Hello from Thanni Canuuu! This is a test message.",
     vendor_id: str = Depends(get_current_vendor_id)
 ):
     """Manually send a test message from this vendor's WhatsApp"""
     try:
         async with httpx.AsyncClient() as client:
+            headers = {"x-api-key": SERVICE_API_KEY}
             response = await client.post(
                 f"{WHATSAPP_SERVICE_URL}/send/{vendor_id}",
+                headers=headers,
                 json={"to": phone, "message": message},
                 timeout=10.0
             )
@@ -3629,6 +3808,7 @@ async def send_test_message(
         raise HTTPException(status_code=500, detail=f"Failed to send test message: {str(e)}")
 
 @api_router.get("/price-settings")
+@api_router.get("/settings/pricing")
 async def get_price_settings(vendor_id: str = Depends(get_current_vendor_id)):
     """
     Get price settings for the authenticated vendor.
@@ -3665,6 +3845,7 @@ async def create_or_update_price_setting(
     return {"success": True, "message": "Price setting updated"}
 
 @api_router.get("/delivery-shifts")
+@api_router.get("/shifts")
 async def get_delivery_shifts(
     date_param: Optional[str] = Query(None),
     vendor_id: str = Depends(get_current_vendor_id)
@@ -3756,7 +3937,7 @@ async def seed_database():
 async def root():
     """Root endpoint - health check"""
     return {
-        "service": "HydroFlow Backend API",
+        "service": "Thanni Canuuu Backend API",
         "status": "running",
         "version": "1.0.0",
         "docs": "/docs"
@@ -3783,8 +3964,15 @@ async def health_check():
 
 # Configure CORS middleware BEFORE including router
 # Include Capacitor origins for Android native app
-_cors_origins = os.environ.get('CORS_ORIGINS', '*').split(',')
+_cors_env = os.environ.get('CORS_ORIGINS', '')
 _capacitor_origins = ['https://localhost', 'capacitor://localhost', 'http://localhost']
+
+# If wildcard or empty, use safe defaults for local dev
+if not _cors_env or _cors_env.strip() == '*':
+    _cors_origins = ['http://localhost:3000', 'http://localhost:8000']
+else:
+    _cors_origins = [o.strip() for o in _cors_env.split(',') if o.strip()]
+
 _all_origins = list(set(_cors_origins + _capacitor_origins))
 
 app.add_middleware(
@@ -3836,6 +4024,250 @@ async def get_damage_reports(
         "total": len(formatted),
         "period_days": days
     }
+
+# NOTE: include_router calls moved to end of file (after all route definitions)
+
+
+# ============================================
+# WEBSOCKET ENDPOINT FOR REAL-TIME UPDATES
+# ============================================
+
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """
+    Authenticated WebSocket endpoint for real-time event streaming.
+    Connect with: ws://host/ws?token=<jwt_token>
+    
+    Events are scoped by vendor_id — vendors see all events for their business,
+    agents see only events relevant to them.
+    """
+    token = websocket.query_params.get("token")
+    if not token:
+        await websocket.close(code=4001, reason="Missing authentication token")
+        return
+
+    payload = decode_token(token)
+    if not payload:
+        await websocket.close(code=4001, reason="Invalid or expired token")
+        return
+
+    vendor_id = payload.get("vendor_id")
+    role = payload.get("role", "vendor")
+    user_id = payload.get("user_id", vendor_id)
+
+    if not vendor_id:
+        await websocket.close(code=4001, reason="Invalid token payload")
+        return
+
+    try:
+        if role == "delivery_agent":
+            await ws_manager.connect_agent(websocket, vendor_id, user_id)
+        else:
+            await ws_manager.connect_vendor(websocket, vendor_id)
+
+        # Keep connection alive, handle incoming messages (heartbeat/pong)
+        while True:
+            try:
+                data = await websocket.receive_text()
+                # Handle ping/pong heartbeat
+                if data == "ping":
+                    await websocket.send_text("pong")
+            except WebSocketDisconnect:
+                break
+    except Exception as e:
+        logger.error(f"WebSocket error for {role} {user_id}: {e}")
+    finally:
+        await ws_manager.disconnect(websocket)
+
+
+# ============================================
+# FCM TOKEN REGISTRATION
+# ============================================
+
+class FCMTokenRequest(BaseModel):
+    token: str = Field(..., description="FCM device token")
+    device_type: str = Field(default="web", description="Device type: web, android, ios")
+
+@api_router.post("/notifications/register")
+async def register_fcm_token(
+    req: FCMTokenRequest,
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)] = None,
+    authorization: Annotated[Optional[str], Header()] = None
+):
+    """
+    Register an FCM device token for push notifications.
+    Works for both vendors and agents.
+    """
+    token = None
+    if credentials:
+        token = credentials.credentials
+    elif authorization:
+        token = extract_token_from_header(authorization)
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    vendor_id = payload.get("vendor_id")
+    role = payload.get("role", "vendor")
+    user_id = payload.get("user_id", vendor_id)
+
+    success = await notification_service.register_device_token(
+        user_id=user_id,
+        vendor_id=vendor_id,
+        role=role,
+        token=req.token,
+        device_type=req.device_type
+    )
+
+    return {"success": success, "message": "Device registered for notifications"}
+
+
+# ============================================
+# NOTIFICATION PREFERENCES
+# ============================================
+
+@api_router.get("/notifications/preferences")
+async def get_notification_preferences(
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)] = None,
+    authorization: Annotated[Optional[str], Header()] = None
+):
+    """Get notification preferences for the authenticated user."""
+    token = None
+    if credentials:
+        token = credentials.credentials
+    elif authorization:
+        token = extract_token_from_header(authorization)
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    vendor_id = payload.get("vendor_id")
+    role = payload.get("role", "vendor")
+    user_id = payload.get("user_id", vendor_id)
+
+    prefs = await db.notification_preferences.find_one(
+        {"user_id": user_id, "vendor_id": vendor_id},
+        {"_id": 0}
+    )
+
+    # Base defaults
+    defaults = {
+        "user_id": user_id,
+        "vendor_id": vendor_id,
+        "role": role,
+        "order_alerts": True,
+        "payment_alerts": True,
+        "system_alerts": True,
+        "sound_enabled": True,
+        "push_enabled": True
+    }
+
+    if not prefs:
+        return defaults
+    
+    # Merge stored prefs with defaults to ensure all keys exist
+    return {**defaults, **prefs}
+
+
+@api_router.put("/notifications/preferences")
+async def update_notification_preferences(
+    request: Request,
+    credentials: Annotated[Optional[HTTPAuthorizationCredentials], Depends(security)] = None,
+    authorization: Annotated[Optional[str], Header()] = None
+):
+    """Update notification preferences for the authenticated user."""
+    token = None
+    if credentials:
+        token = credentials.credentials
+    elif authorization:
+        token = extract_token_from_header(authorization)
+
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    payload = decode_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="Invalid token")
+
+    vendor_id = payload.get("vendor_id")
+    role = payload.get("role", "vendor")
+    user_id = payload.get("user_id", vendor_id)
+
+    body = await request.json()
+
+    # Only allow known preference fields
+    allowed_fields = {"order_alerts", "payment_alerts", "system_alerts", "sound_enabled", "push_enabled"}
+    update_data = {k: bool(v) for k, v in body.items() if k in allowed_fields}
+
+    if not update_data:
+        raise HTTPException(status_code=400, detail="No valid preference fields provided")
+
+    update_data["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+    await db.notification_preferences.update_one(
+        {"user_id": user_id, "vendor_id": vendor_id},
+        {"$set": {
+            **update_data,
+            "user_id": user_id,
+            "vendor_id": vendor_id,
+            "role": role
+        }},
+        upsert=True
+    )
+
+    logger.info(f"Notification preferences updated for {role} {user_id}: {update_data}")
+    return {"success": True, "message": "Preferences updated", "preferences": update_data}
+
+
+# ============================================
+# CUSTOMER LANGUAGE PREFERENCE
+# ============================================
+
+@api_router.put("/customers/{phone_number}/language")
+async def update_customer_language(
+    phone_number: str,
+    request: Request,
+    api_key: str = Depends(verify_service_api_key)
+):
+    """Update customer's preferred language. Called by WhatsApp service."""
+    body = await request.json()
+    language = body.get("preferred_language", "en")
+    vendor_id = body.get("vendor_id")
+
+    if language not in ["en", "ta"]:
+        raise HTTPException(status_code=400, detail="Unsupported language. Use 'en' or 'ta'.")
+
+    if not vendor_id:
+        raise HTTPException(status_code=400, detail="vendor_id is required")
+
+    result = await db.customers.update_one(
+        {"phone_number": phone_number, "vendor_id": vendor_id},
+        {"$set": {"preferred_language": language, "updated_at": datetime.now(timezone.utc).isoformat()}}
+    )
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Customer not found")
+
+    return {"success": True, "language": language}
+
+
+@api_router.get("/ws/stats")
+async def ws_connection_stats(vendor_id: str = Depends(get_current_vendor_id)):
+    """Get WebSocket connection statistics (vendor only)."""
+    return ws_manager.get_connection_stats()
+
+
+# ============================================
+# ROUTER REGISTRATION (must be AFTER all route definitions)
+# ============================================
 
 # Include API router
 app.include_router(api_router)

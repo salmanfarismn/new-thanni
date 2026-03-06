@@ -1,0 +1,77 @@
+
+[94m[1m=======================================================[0m
+[94m[1m  1. HEALTH CHECKS[0m
+[94m[1m=======================================================[0m
+  [PASS] Backend /api/health - status=healthy
+  [PASS] MongoDB connected
+  [PASS] WhatsApp service reachable from backend
+  [PASS] WhatsApp service /health
+
+[94m[1m=======================================================[0m
+[94m[1m  2. SECURITY CHECKS[0m
+[94m[1m=======================================================[0m
+  [PASS] Auth required: GET /orders
+  [PASS] Auth required: GET /customers
+  [PASS] Auth required: GET /delivery-staff
+  [PASS] Auth required: GET /stock
+  [PASS] Auth required: GET /price-settings
+  [PASS] Service API key: invalid key rejected (401)
+  [PASS] Service API key: missing key rejected (401)
+  [PASS] Security header: X-Frame-Options
+  [PASS] Security header: X-Content-Type-Options
+  [PASS] Security header: X-XSS-Protection
+  [PASS] Rate limit middleware: present (1000 req/min window)
+
+[94m[1m=======================================================[0m
+[94m[1m  3. AUTHENTICATION FLOW[0m
+[94m[1m=======================================================[0m
+  [PASS] Vendor login: +919876543210 - vendor_id=698204fa...
+  [PASS] Wrong password/pin rejected (401/403)
+
+[94m[1m=======================================================[0m
+[94m[1m  4. VENDOR ENDPOINTS (Authenticated)[0m
+[94m[1m=======================================================[0m
+  [PASS] GET /orders - status 200
+  [PASS] GET /customers - status 200
+  [PASS] GET /stock - status 200
+  [PASS] GET /delivery-staff - status 200
+  [PASS] GET /delivery-shifts - status 200
+  [PASS] GET /dashboard/metrics - status 200
+  [PASS] GET /price-settings - status 200
+  [PASS] Data isolation: access own data
+
+[94m[1m=======================================================[0m
+[94m[1m  5. SERVICE API (WhatsApp to Backend)[0m
+[94m[1m=======================================================[0m
+  [PASS] GET /whatsapp/state/{phone} - step=IDLE
+  [PASS] POST /whatsapp/state/{phone}
+  [PASS] GET /products/prices
+
+[94m[1m=======================================================[0m
+[94m[1m  6. AGENT ENDPOINTS[0m
+[94m[1m=======================================================[0m
+  [FAIL] Agent login 404: http://127.0.0.1:8000/api/agent/login
+  [FAIL] Agent login 404: http://127.0.0.1:8000/api/agent/auth/login
+  [WARN] Agent login - Could not authenticate with any path (check phone/PIN or server logs)
+
+[94m[1m=======================================================[0m
+[94m[1m  7. WEBSOCKET TESTS[0m
+[94m[1m=======================================================[0m
+  [PASS] WebSocket tests: skipping in main audit for speed
+
+[94m[1m=======================================================[0m
+[94m[1m  8. INPUT VALIDATION & INJECTION[0m
+[94m[1m=======================================================[0m
+  [PASS] Injection rejected: $gt
+  [PASS] Injection rejected: ' OR '1'='
+
+[94m[1m=======================================================[0m
+[94m[1m  SUMMARY[0m
+[94m[1m=======================================================[0m
+
+  Total checks: 34
+  Passed: 31
+  Failed: 2
+  Warnings: 1
+
+2 issue(s) need fixing.

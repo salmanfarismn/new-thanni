@@ -12,6 +12,7 @@ import Layout from './components/layout/Layout';
 import AgentLayout from './components/layout/AgentLayout';
 import { CompanyNameProvider } from './context/AppContext';
 import PrivateRoute from './components/PrivateRoute';
+import { PushNotificationService } from './utils/PushNotificationService';
 
 // Lazy-loaded pages (code-split per route for smaller initial bundle)
 const Dashboard = lazy(() => import('./pages/Dashboard'));
@@ -30,6 +31,8 @@ const AgentOrders = lazy(() => import('./pages/agent/AgentOrders'));
 const AgentCompleteOrder = lazy(() => import('./pages/agent/AgentCompleteOrder'));
 const AgentReportDamage = lazy(() => import('./pages/agent/AgentReportDamage'));
 const AgentHistory = lazy(() => import('./pages/agent/AgentHistory'));
+const AgentDues = lazy(() => import('./pages/agent/AgentDues'));
+const AgentProfile = lazy(() => import('./pages/agent/AgentProfile'));
 
 // Loading spinner shown while lazy chunks load
 function PageLoader() {
@@ -77,8 +80,23 @@ function CapacitorInit() {
       }
     });
 
+    // Initialize Push Notifications
+    PushNotificationService.init();
+
+    // Deep link from notifications
+    const handleNotificationOpen = (e) => {
+      const { order_id, type } = e.detail;
+      if (order_id) {
+        // Simple navigation to orders with search term
+        navigate(`/orders?search=${order_id}`);
+      }
+    };
+
+    window.addEventListener('app:notification_opened', handleNotificationOpen);
+
     return () => {
       backHandler.then(h => h.remove());
+      window.removeEventListener('app:notification_opened', handleNotificationOpen);
     };
   }, [navigate]);
 
@@ -190,10 +208,24 @@ function App() {
                     </AgentLayout>
                   </PrivateRoute>
                 } />
+                <Route path="/agent/dues" element={
+                  <PrivateRoute allowedRoles={['delivery_agent']}>
+                    <AgentLayout>
+                      <AgentDues />
+                    </AgentLayout>
+                  </PrivateRoute>
+                } />
                 <Route path="/agent/history" element={
                   <PrivateRoute allowedRoles={['delivery_agent']}>
                     <AgentLayout>
                       <AgentHistory />
+                    </AgentLayout>
+                  </PrivateRoute>
+                } />
+                <Route path="/agent/profile" element={
+                  <PrivateRoute allowedRoles={['delivery_agent']}>
+                    <AgentLayout>
+                      <AgentProfile />
                     </AgentLayout>
                   </PrivateRoute>
                 } />

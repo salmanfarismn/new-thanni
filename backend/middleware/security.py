@@ -64,7 +64,7 @@ def validate_phone_number(phone: str) -> Optional[str]:
 
 def is_safe_input(text: str) -> bool:
     """
-    Check if input contains suspicious patterns (NoSQL injection, script tags).
+    Check if input contains suspicious patterns (NoSQL injection, script tags, XSS vectors).
     
     Args:
         text: Input text
@@ -76,14 +76,23 @@ def is_safe_input(text: str) -> bool:
         return True
         
     # Check for common NoSQL injection operators if passed as string
-    nosql_patterns = [r'\$gt', r'\$lt', r'\$ne', r'\$in', r'\$where']
+    nosql_patterns = [
+        r'\$gt', r'\$lt', r'\$ne', r'\$in', r'\$where',
+        r'\$regex', r'\$or', r'\$and', r'\$set', r'\$unset',
+        r'\$exists', r'\$elemMatch', r'\$nin'
+    ]
     
     for pattern in nosql_patterns:
         if re.search(pattern, text, re.IGNORECASE):
             return False
             
-    # Check for script tags
-    if re.search(r'<script', text, re.IGNORECASE):
-        return False
+    # Check for script tags and XSS vectors
+    xss_patterns = [
+        r'<script', r'javascript:', r'data:text/html',
+        r'vbscript:', r'on\w+\s*=',  # onclick=, onerror=, etc.
+    ]
+    for pattern in xss_patterns:
+        if re.search(pattern, text, re.IGNORECASE):
+            return False
         
     return True

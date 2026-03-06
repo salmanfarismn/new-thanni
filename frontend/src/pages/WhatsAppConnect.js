@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { api } from '../context/AppContext';
 import { CheckCircle, QrCode, AlertCircle, LogOut, RefreshCw, Smartphone, Menu, Scan, Activity, HelpCircle, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
@@ -9,45 +9,72 @@ import Button from '../components/ui/button';
 export default function WhatsAppConnect() {
   const [status, setStatus] = useState({ connected: false });
   const [qrCode, setQrCode] = useState(null);
+  const [qrStatus, setQrStatus] = useState('idle'); // idle | initializing | pending | ready | connected
   const [loading, setLoading] = useState(true);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [resetting, setResetting] = useState(false);
+  const [error, setError] = useState(null);
+  const statusRef = useRef(status);
 
+  // Keep ref in sync
   useEffect(() => {
-    checkStatus();
-    const interval = setInterval(() => {
-      checkStatus();
-      if (!status.connected) {
-        fetchQR();
-      }
-    }, 3000);
-    return () => clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    statusRef.current = status;
+  }, [status]);
 
-  const checkStatus = async () => {
+  const checkStatus = useCallback(async () => {
     try {
       const response = await api.get('/whatsapp/status');
       setStatus(response.data);
+      setError(null);
       if (response.data.connected) {
         setQrCode(null);
+        setQrStatus('connected');
       }
-    } catch (error) {
-      console.error('Error checking WhatsApp status:', error);
+    } catch (err) {
+      console.error('Error checking WhatsApp status:', err);
+      setError('Unable to reach backend. Retrying...');
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
-  const fetchQR = async () => {
+  const fetchQR = useCallback(async () => {
     try {
       const response = await api.get('/whatsapp/qr');
-      if (response.data.qr) {
-        setQrCode(response.data.qr);
+      const data = response.data;
+      setError(null);
+
+      if (data.connected) {
+        setQrCode(null);
+        setQrStatus('connected');
+        return;
       }
-    } catch (error) {
-      console.error('Error fetching QR code:', error);
+
+      if (data.qr) {
+        setQrCode(data.qr);
+        setQrStatus('ready');
+      } else if (data.status === 'initializing') {
+        setQrStatus('initializing');
+      } else if (data.status === 'pending') {
+        setQrStatus('pending');
+      }
+    } catch (err) {
+      console.error('Error fetching QR code:', err);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    checkStatus();
+    fetchQR();
+    const interval = setInterval(() => {
+      checkStatus();
+      // Only fetch QR if not connected (using ref for latest value)
+      if (!statusRef.current.connected) {
+        fetchQR();
+      }
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [checkStatus, fetchQR]);
 
   const handleDisconnect = async () => {
     if (!window.confirm('Are you sure you want to disconnect? The bot will stop replying to customers.')) return;
@@ -59,8 +86,9 @@ export default function WhatsAppConnect() {
         toast.success('WhatsApp disconnected');
         setStatus({ connected: false });
         setQrCode(null);
+        setQrStatus('idle');
       }
-    } catch (error) {
+    } catch (err) {
       toast.error('Failed to disconnect');
     } finally {
       setDisconnecting(false);
@@ -69,11 +97,45 @@ export default function WhatsAppConnect() {
 
   const handleRefresh = async () => {
     setQrCode(null);
-    await checkStatus();
-    if (!status.connected) {
-      await fetchQR();
+    setQrStatus('initializing');
+    toast.info('Refreshing QR code...');
+    // Force a reconnect via the backend to get a fresh QR
+    try {
+      await api.post('/whatsapp/reconnect');
+    } catch (e) {
+      // If reconnect fails, just re-fetch
     }
-    toast.success('QR Code refreshed');
+    // Wait a moment then start polling
+    setTimeout(async () => {
+      await checkStatus();
+      if (!statusRef.current.connected) {
+        await fetchQR();
+      }
+    }, 3000);
+  };
+
+  const handleForceReset = async () => {
+    if (!window.confirm('This will completely wipe your WhatsApp session and generate a new QR code. Use this if you are seeing "Couldn\'t login" on your phone. Continue?')) return;
+
+    try {
+      setResetting(true);
+      setQrCode(null);
+      setQrStatus('initializing');
+      const response = await api.post('/whatsapp/reset');
+      if (response.data.success) {
+        toast.success('Session wiped. Generating new QR...');
+        // Wait for the service to reinitialize
+        setTimeout(() => {
+          fetchQR();
+          setResetting(false);
+        }, 4000);
+        return;
+      }
+    } catch (err) {
+      toast.error('Failed to reset session');
+    } finally {
+      setResetting(false);
+    }
   };
 
   if (loading) {
@@ -165,6 +227,11 @@ export default function WhatsAppConnect() {
                           src={`https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(qrCode)}`}
                           alt="WhatsApp QR Code"
                           className="w-64 h-64 mix-blend-multiply"
+                          onError={(e) => {
+                            e.target.onerror = null;
+                            e.target.style.display = 'none';
+                            e.target.parentElement.innerHTML = `<div class="w-64 h-64 flex items-center justify-center text-slate-400 text-sm">QR render failed. Please refresh.</div>`;
+                          }}
                         />
                       </div>
                       <div className="absolute inset-0 flex items-center justify-center bg-white/80 opacity-0 group-hover:opacity-100 transition-opacity backdrop-blur-sm rounded-2xl">
@@ -176,7 +243,13 @@ export default function WhatsAppConnect() {
                   ) : (
                     <div className="w-64 h-64 flex flex-col items-center justify-center">
                       <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-slate-400 mb-4"></div>
-                      <p className="text-slate-400 text-sm font-medium">Generating secure code...</p>
+                      <p className="text-slate-500 text-sm font-medium">
+                        {qrStatus === 'initializing' ? 'Connecting to WhatsApp...' :
+                          qrStatus === 'pending' ? 'Generating QR code...' :
+                            error ? error :
+                              'Initializing...'}
+                      </p>
+                      <p className="text-slate-400 text-xs mt-2">This may take 5–10 seconds</p>
                     </div>
                   )}
                 </div>
@@ -207,10 +280,18 @@ export default function WhatsAppConnect() {
                 </div>
               </div>
 
-              <div className="bg-slate-50 border-t border-slate-100 p-4 text-center">
-                <p className="text-xs text-slate-400 flex items-center justify-center gap-1.5">
-                  <ShieldCheck size={14} /> End-to-end encrypted connection managed by <span className="font-semibold text-slate-600">Thanni Canuuu</span>
+              <div className="bg-slate-50 border-t border-slate-100 p-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <p className="text-xs text-slate-400 flex items-center justify-center gap-1.5 font-medium">
+                  <ShieldCheck size={14} /> End-to-end encrypted connection
                 </p>
+                <button
+                  onClick={handleForceReset}
+                  disabled={resetting}
+                  className="text-xs font-bold text-slate-400 hover:text-red-500 transition-colors uppercase tracking-widest flex items-center gap-1"
+                >
+                  <RefreshCw size={12} className={resetting ? 'animate-spin' : ''} />
+                  {resetting ? 'Resetting...' : 'Force Reset Session'}
+                </button>
               </div>
             </div>
           )}
@@ -271,6 +352,32 @@ export default function WhatsAppConnect() {
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Troubleshooting */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-6">
+            <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-4 text-sm uppercase tracking-wider">
+              <AlertCircle size={18} className="text-amber-500" />
+              Troubleshooting
+            </h3>
+            <ul className="space-y-3">
+              <li className="text-xs text-slate-500 flex gap-2">
+                <span className="font-bold text-slate-400">•</span>
+                <span>If QR code doesn't load, try clicking <strong>Refresh Code</strong> or reload the page.</span>
+              </li>
+              <li className="text-xs text-slate-500 flex gap-2">
+                <span className="font-bold text-slate-400">•</span>
+                <span>If your phone says <strong>"Couldn't login"</strong>, use the <strong>Force Reset Session</strong> link below the QR code.</span>
+              </li>
+              <li className="text-xs text-slate-500 flex gap-2">
+                <span className="font-bold text-slate-400">•</span>
+                <span>Ensure your phone has a stable internet connection while scanning.</span>
+              </li>
+              <li className="text-xs text-slate-500 flex gap-2">
+                <span className="font-bold text-slate-400">•</span>
+                <span>Make sure you don't have too many linked devices (Max 4).</span>
+              </li>
+            </ul>
           </div>
         </div>
       </div>

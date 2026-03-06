@@ -29,7 +29,7 @@ export default function AgentCompleteOrder() {
         try {
             const res = await api.get('/agent/orders');
             const orderList = (res.data.orders || []).filter(o =>
-                o.status === 'assigned' || o.status === 'out_for_delivery'
+                o.status === 'assigned' || o.status === 'out_for_delivery' || o.status === 'pending' || o.status === 'in_queue'
             );
             setOrders(orderList);
 

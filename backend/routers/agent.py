@@ -3,7 +3,7 @@ Agent API router for Thanni Canuuu delivery agent system.
 Provides endpoints for agent dashboard, orders, delivery completion, and damage reporting.
 All endpoints require delivery_agent role via require_agent guard.
 """
-from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Depends, Query, UploadFile, File, Form, Request
 from pydantic import BaseModel, Field
 from typing import Optional, List, Dict
 from datetime import datetime, timezone, timedelta
@@ -13,6 +13,7 @@ import uuid
 import shutil
 
 from middleware.auth_guards import require_agent
+from routers.auth import login_agent, AgentLoginRequest
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,20 @@ class CompleteOrderRequest(BaseModel):
     payment_type: str = Field(..., description="Payment type: cash, upi, not_paid")
     empty_cans_collected: int = Field(default=0, ge=0, description="Number of empty cans collected")
     notes: Optional[str] = Field(default=None, max_length=500, description="Optional delivery notes")
+
+
+# ============================================
+# AGENT LOGIN ALIAS
+# ============================================
+
+@router.post("/login")
+@router.post("/auth/login")
+async def agent_login_alias(data: AgentLoginRequest, request: Request):
+    """
+    Alias for agent login.
+    Points to the same logic in auth router.
+    """
+    return await login_agent(data, request)
 
 
 # ============================================
@@ -84,12 +99,11 @@ async def get_agent_dashboard(agent: Dict = Depends(require_agent)):
     
     today_str = now_ist.strftime("%Y-%m-%d")
     
-    # Get today's assigned orders for this agent
+    # Get assigned orders for this agent (all active ones, even if from yesterday)
     assigned_orders = await db.orders.count_documents({
         "vendor_id": vendor_id,
         "delivery_staff_id": agent_id,
-        "status": {"$in": ["assigned", "out_for_delivery"]},
-        "created_at": {"$gte": today_start_utc.isoformat()}
+        "status": {"$in": ["assigned", "out_for_delivery", "pending", "in_queue"]}
     })
     
     # Get today's completed deliveries (based on delivery time)
@@ -165,6 +179,22 @@ async def get_agent_dashboard(agent: Dict = Depends(require_agent)):
         "status": "delivered",
         "payment_status": {"$in": ["unpaid", "not_paid", "cash_due", None]}
     })
+
+    # Get total outstanding amount for this agent
+    outstanding_pipeline = [
+        {"$match": {
+            "vendor_id": vendor_id,
+            "delivery_staff_id": agent_id,
+            "status": "delivered",
+            "payment_status": {"$in": [
+                "pending", "upi_pending", "cash_due",
+                "delivered_unpaid", "unpaid", "not_paid"
+            ]}
+        }},
+        {"$group": {"_id": None, "total_outstanding": {"$sum": "$amount"}}}
+    ]
+    outstanding_result = await db.orders.aggregate(outstanding_pipeline).to_list(1)
+    total_outstanding = outstanding_result[0]["total_outstanding"] if outstanding_result else 0
     
     # Get agent info
     agent_info = await db.delivery_staff.find_one({"staff_id": agent_id, "vendor_id": vendor_id})
@@ -181,7 +211,8 @@ async def get_agent_dashboard(agent: Dict = Depends(require_agent)):
             "empty_cans_collected": empty_cans,
             "unpaid_orders": unpaid_count,
             "cash_collected": cash_collected,
-            "upi_collected": upi_collected
+            "upi_collected": upi_collected,
+            "total_outstanding": total_outstanding
         }
     }
 
@@ -210,7 +241,7 @@ async def get_agent_orders(
     if status:
         query["status"] = status
     else:
-        # Default: show active orders (not delivered/cancelled)
+        # Default: show active orders ONLY
         query["status"] = {"$in": ["in_queue", "assigned", "out_for_delivery", "pending"]}
     
     orders = await db.orders.find(query).sort("created_at", -1).to_list(100)
@@ -239,6 +270,153 @@ async def get_agent_orders(
     return {
         "orders": formatted_orders,
         "total": len(formatted_orders)
+    }
+
+
+# ============================================
+# AGENT DUES ENDPOINTS
+# ============================================
+
+@router.get("/dues")
+async def get_agent_dues(
+    status: Optional[str] = Query(None, description="Filter: upi_pending, cash_due, delivered_unpaid, all"),
+    agent: Dict = Depends(require_agent)
+):
+    """
+    Get all unpaid orders delivered by this agent.
+    Shows only dues related to this agent's deliveries.
+    Returns customer name, address, amount, payment mode, and due status.
+    """
+    agent_id = agent["agent_id"]
+    vendor_id = agent["vendor_id"]
+
+    # Payment statuses that indicate unpaid/dues
+    due_statuses = ["pending", "upi_pending", "cash_due", "delivered_unpaid", "unpaid", "not_paid"]
+
+    query = {
+        "vendor_id": vendor_id,
+        "delivery_staff_id": agent_id,
+        "status": "delivered",
+    }
+
+    if status and status != "all":
+        query["payment_status"] = status
+    else:
+        query["payment_status"] = {"$in": due_statuses}
+
+    orders = await db.orders.find(query).sort("delivered_at", -1).to_list(500)
+
+    dues = []
+    total_due = 0
+    for order in orders:
+        amount = order.get("amount", 0)
+        total_due += amount
+        dues.append({
+            "order_id": order.get("order_id", ""),
+            "customer_name": order.get("customer_name", "Unknown"),
+            "customer_phone": order.get("customer_phone", ""),
+            "customer_address": order.get("customer_address", ""),
+            "amount": amount,
+            "payment_status": order.get("payment_status", "unpaid"),
+            "payment_method": order.get("payment_method"),
+            "quantity": order.get("quantity", 1),
+            "litre_size": order.get("litre_size", 20),
+            "delivered_at": order.get("delivered_at", order.get("created_at", "")),
+            "created_at": order.get("created_at", ""),
+        })
+
+    return {
+        "dues": dues,
+        "total": len(dues),
+        "total_due_amount": total_due
+    }
+
+
+@router.get("/dues/summary")
+async def get_agent_dues_summary(agent: Dict = Depends(require_agent)):
+    """
+    Get aggregated dues summary for the agent dashboard.
+    Returns today's collections, pending dues, cleared dues, and total outstanding.
+    """
+    agent_id = agent["agent_id"]
+    vendor_id = agent["vendor_id"]
+
+    # Today's date range in IST
+    ist_offset = timedelta(hours=5, minutes=30)
+    now_ist = datetime.now(timezone.utc) + ist_offset
+    today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+    today_start_utc = today_start_ist - ist_offset
+
+    # Today's collections (paid today)
+    collections_pipeline = [
+        {"$match": {
+            "vendor_id": vendor_id,
+            "delivery_staff_id": agent_id,
+            "status": "delivered",
+            "payment_status": {"$in": ["paid_cash", "paid_upi"]},
+            "delivered_at": {"$gte": today_start_utc.isoformat()}
+        }},
+        {"$group": {
+            "_id": "$payment_status",
+            "amount": {"$sum": "$amount"},
+            "count": {"$sum": 1}
+        }}
+    ]
+    collections = await db.orders.aggregate(collections_pipeline).to_list(10)
+    today_cash = 0
+    today_upi = 0
+    today_cash_count = 0
+    today_upi_count = 0
+    for c in collections:
+        if c["_id"] == "paid_cash":
+            today_cash = c["amount"]
+            today_cash_count = c["count"]
+        elif c["_id"] == "paid_upi":
+            today_upi = c["amount"]
+            today_upi_count = c["count"]
+
+    # Pending dues breakdown (all time for this agent)
+    due_statuses = ["pending", "upi_pending", "cash_due", "delivered_unpaid", "unpaid", "not_paid"]
+    pending_pipeline = [
+        {"$match": {
+            "vendor_id": vendor_id,
+            "delivery_staff_id": agent_id,
+            "status": "delivered",
+            "payment_status": {"$in": due_statuses}
+        }},
+        {"$group": {
+            "_id": "$payment_status",
+            "amount": {"$sum": "$amount"},
+            "count": {"$sum": 1}
+        }}
+    ]
+    pending = await db.orders.aggregate(pending_pipeline).to_list(10)
+
+    pending_breakdown = {}
+    total_outstanding = 0
+    total_pending_orders = 0
+    for p in pending:
+        pending_breakdown[p["_id"]] = {
+            "amount": p["amount"],
+            "count": p["count"]
+        }
+        total_outstanding += p["amount"]
+        total_pending_orders += p["count"]
+
+    return {
+        "today": {
+            "cash_collected": today_cash,
+            "cash_orders": today_cash_count,
+            "upi_collected": today_upi,
+            "upi_orders": today_upi_count,
+            "total_collected": today_cash + today_upi,
+            "total_orders": today_cash_count + today_upi_count
+        },
+        "outstanding": {
+            "total_amount": total_outstanding,
+            "total_orders": total_pending_orders,
+            "breakdown": pending_breakdown
+        }
     }
 
 
@@ -276,10 +454,17 @@ async def complete_order(
         )
     
     if order.get("status") == "delivered":
-        raise HTTPException(
-            status_code=400,
-            detail="This order has already been delivered."
-        )
+        # Idempotency: if this agent already delivered this order, return success
+        # This prevents double-tap errors on mobile
+        return {
+            "success": True,
+            "message": "Order already delivered (duplicate request ignored).",
+            "order_id": order_id,
+            "status": "delivered",
+            "payment_status": order.get("payment_status", "unknown"),
+            "delivery_photo_url": order.get("delivery_photo_url"),
+            "idempotent": True
+        }
     
     if order.get("status") == "cancelled":
         raise HTTPException(
@@ -287,13 +472,14 @@ async def complete_order(
             detail="Cannot complete a cancelled order."
         )
     
-    # Map payment type
+    # Map payment type — CRITICAL: 'not_paid' maps to 'delivered_unpaid'
+    # to match dues tracking filters across the platform
     payment_status_map = {
         "cash": "paid_cash",
         "upi": "paid_upi",
-        "not_paid": "unpaid"
+        "not_paid": "delivered_unpaid"
     }
-    payment_status = payment_status_map.get(payment_type, "unpaid")
+    payment_status = payment_status_map.get(payment_type, "delivered_unpaid")
     
     now = datetime.now(timezone.utc).isoformat()
     
@@ -338,16 +524,45 @@ async def complete_order(
         }
     )
     
-    # Update stock if empty cans collected
-    if empty_cans_collected > 0:
-        ist_offset = timedelta(hours=5, minutes=30)
-        today = (datetime.now(timezone.utc) + ist_offset).strftime("%Y-%m-%d")
-        await db.stock.update_one(
-            {"date": today, "vendor_id": vendor_id},
-            {"$inc": {"available_stock": empty_cans_collected}},
-        )
+    # Note: empty_cans_collected are recorded in the order itself (already updated in update_one above).
+    # They should NOT increment 'available_stock' because that field represents FULL water cans available for sale.
+    # Empty cans are tracked separately via metrics.
+    pass
     
     logger.info(f"Order {order_id} delivered by agent {agent_id} (payment: {payment_type}, photo: {bool(delivery_photo_url)})")
+
+    # Emit real-time WebSocket event to vendor
+    try:
+        import asyncio
+        from ws_manager import ws_manager
+        import notification_service
+
+        agent_info = await db.delivery_staff.find_one({"staff_id": agent_id, "vendor_id": vendor_id})
+        agent_name = agent_info["name"] if agent_info else "Agent"
+
+        asyncio.create_task(ws_manager.broadcast_event(
+            vendor_id=vendor_id,
+            event_type="order_delivered",
+            data={
+                "order_id": order_id,
+                "agent_id": agent_id,
+                "agent_name": agent_name,
+                "customer_name": order.get("customer_name", ""),
+                "amount": order.get("amount", 0),
+                "payment_status": payment_status,
+                "payment_type": payment_type,
+                "empty_cans_collected": empty_cans_collected,
+            }
+        ))
+
+        # Push notification to vendor
+        asyncio.create_task(notification_service.notify_order_delivered(
+            order={**order, "payment_status": payment_status},
+            vendor_id=vendor_id,
+            agent_name=agent_name
+        ))
+    except Exception as e:
+        logger.warning(f"Failed to emit delivery event: {e}")
     
     return {
         "success": True,
@@ -446,7 +661,48 @@ async def report_damage(
             {"$inc": stock_update}
         )
     
-    logger.info(f"Damage report {report_id} by {agent_name} ({agent_id}): damaged={damaged_qty}, returned={returned_qty}, photo={bool(photo_url)}")
+    logger.info(f"Damage report {report_id} by {agent_name} ({agent_id}): damaged={damaged_qty}, returned={returned_qty}, photo={bool(photo_url)})")
+
+    # Emit real-time WebSocket event to vendor
+    try:
+        import asyncio
+        from ws_manager import ws_manager
+        import notification_service
+
+        event_data = {
+            "report_id": report_id,
+            "agent_id": agent_id,
+            "agent_name": agent_name,
+            "order_id": order_id,
+            "damaged_qty": damaged_qty,
+            "returned_qty": returned_qty,
+            "reason": reason,
+            "litre_size": litre_size,
+        }
+        asyncio.create_task(ws_manager.broadcast_event(
+            vendor_id=vendor_id,
+            event_type="damage_report",
+            data=event_data
+        ))
+
+        # Also emit stock_update event
+        asyncio.create_task(ws_manager.broadcast_event(
+            vendor_id=vendor_id,
+            event_type="stock_update",
+            data={
+                "source": "damage_report",
+                "report_id": report_id,
+                "stock_change": stock_update.get("available_stock", 0),
+            }
+        ))
+
+        # Push notification to vendor
+        asyncio.create_task(notification_service.notify_damage_report(
+            report=damage_doc,
+            vendor_id=vendor_id
+        ))
+    except Exception as e:
+        logger.warning(f"Failed to emit damage report event: {e}")
     
     return {
         "success": True,
@@ -462,23 +718,60 @@ async def report_damage(
 
 @router.get("/history")
 async def get_agent_history(
-    days: int = Query(default=7, ge=1, le=30, description="Number of days of history"),
+    days: Optional[int] = Query(None, ge=1, le=90, description="Number of days of history"),
+    start_date: Optional[str] = Query(None, description="Start date YYYY-MM-DD"),
+    end_date: Optional[str] = Query(None, description="End date YYYY-MM-DD"),
     agent: Dict = Depends(require_agent)
 ):
-    """Get agent's delivery history for the last N days with earnings summary."""
+    """
+    Get agent's delivery history.
+    Supports predefined 'days' or a custom 'start_date' and 'end_date' range.
+    """
     agent_id = agent["agent_id"]
     vendor_id = agent["vendor_id"]
     
     ist_offset = timedelta(hours=5, minutes=30)
-    cutoff = (datetime.now(timezone.utc) + ist_offset - timedelta(days=days))
-    cutoff_str = cutoff.isoformat()
+    now_ist = datetime.now(timezone.utc) + ist_offset
     
-    orders = await db.orders.find({
+    query = {
         "vendor_id": vendor_id,
         "delivery_staff_id": agent_id,
-        "status": "delivered",
-        "created_at": {"$gte": cutoff_str}
-    }).sort("created_at", -1).to_list(200)
+        "status": "delivered"
+    }
+
+    if start_date and end_date:
+        # Custom Range
+        try:
+            # Shift IST dates to UTC boundaries for mongo query
+            # IST midnight = 18:30 UTC previous day
+            s_dt = datetime.strptime(start_date, "%Y-%m-%d")
+            e_dt = datetime.strptime(end_date, "%Y-%m-%d")
+            
+            s_utc = (s_dt - ist_offset).replace(hour=18, minute=30, second=0).isoformat()
+            e_utc = (e_dt - ist_offset).replace(hour=18, minute=29, second=59).isoformat()
+            
+            # Actually, delivered_at is often stored as ISO string in backend
+            # To be safe, we use the date part or just bound it
+            query["delivered_at"] = {"$gte": s_utc, "$lte": e_utc}
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+    elif days:
+        # Predefined Days
+        if days == 1:
+            # Strict "Today" from midnight IST
+            today_start_ist = now_ist.replace(hour=0, minute=0, second=0, microsecond=0)
+            cutoff_utc = (today_start_ist - ist_offset).isoformat()
+        else:
+            cutoff = now_ist - timedelta(days=days)
+            cutoff_utc = (cutoff - ist_offset).isoformat()
+        query["delivered_at"] = {"$gte": cutoff_utc}
+    else:
+        # Default 30 days
+        cutoff = now_ist - timedelta(days=30)
+        cutoff_utc = (cutoff - ist_offset).isoformat()
+        query["delivered_at"] = {"$gte": cutoff_utc}
+    
+    orders = await db.orders.find(query).sort("delivered_at", -1).to_list(1000)
     
     history = []
     total_earnings = 0
@@ -512,7 +805,6 @@ async def get_agent_history(
     return {
         "history": history,
         "total": len(history),
-        "period_days": days,
         "summary": {
             "total_earnings": total_earnings,
             "total_empty_cans": total_empty_cans,

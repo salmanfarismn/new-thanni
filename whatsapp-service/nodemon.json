@@ -1,5 +1,12 @@
 {
     "ignore": [
-        "auth_info/*"
-    ]
+        "auth_info_*/**",
+        "auth_info_*",
+        "**/auth_info_*/**",
+        "*.log",
+        "*.txt",
+        "conversation_state.json",
+        "node_modules/*"
+    ],
+    "delay": 2500
 }

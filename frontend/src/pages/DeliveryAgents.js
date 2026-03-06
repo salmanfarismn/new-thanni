@@ -217,9 +217,9 @@ export default function DeliveryAgents({ minimal = false }) {
 
             {/* Add Agent Dialog */}
             <Dialog open={showForm} onOpenChange={setShowForm}>
-                <DialogContent className="sm:max-w-[425px] w-[95vw] rounded-3xl p-6">
+                <DialogContent className="sm:max-w-[450px] w-[95vw] rounded-[32px] p-6 sm:p-8 max-h-[90vh] overflow-y-auto">
                     <DialogHeader>
-                        <DialogTitle className="text-2xl font-black text-slate-900">New Agent</DialogTitle>
+                        <DialogTitle className="text-2xl font-black text-slate-900 tracking-tight">New Agent</DialogTitle>
                     </DialogHeader>
 
                     <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-5 mt-2">
@@ -299,9 +299,9 @@ export default function DeliveryAgents({ minimal = false }) {
                             </p>
                         </div>
 
-                        <DialogFooter className="gap-2 sm:gap-0 mt-4">
-                            <Button type="button" variant="ghost" onClick={() => setShowForm(false)}>Cancel</Button>
-                            <Button type="submit" disabled={saving} className="bg-sky-600 hover:bg-sky-700 text-white flex-1">{saving ? 'Saving...' : 'Create Agent'}</Button>
+                        <DialogFooter className="gap-3 sm:gap-2 mt-6 flex-col sm:flex-row">
+                            <Button type="button" variant="ghost" onClick={() => setShowForm(false)} className="h-14 sm:h-auto rounded-2xl w-full sm:w-auto order-2 sm:order-1 font-bold">Cancel</Button>
+                            <Button type="submit" disabled={saving} className="h-14 sm:h-auto rounded-2xl bg-sky-600 hover:bg-sky-700 text-white flex-1 order-1 sm:order-2 font-black shadow-lg shadow-sky-600/20 active:scale-[0.98] transition-transform">{saving ? 'Saving...' : 'Create Agent'}</Button>
                         </DialogFooter>
                     </form>
                 </DialogContent>
@@ -309,10 +309,12 @@ export default function DeliveryAgents({ minimal = false }) {
 
             {/* PIN Reset Dialog */}
             <Dialog open={resetPinDialog} onOpenChange={setResetPinDialog}>
-                <DialogContent className="sm:max-w-[380px] w-[95vw] rounded-3xl p-6">
+                <DialogContent className="sm:max-w-[400px] w-[95vw] rounded-[32px] p-6 sm:p-8">
                     <DialogHeader>
                         <DialogTitle className="text-xl font-black text-slate-900 flex items-center gap-2">
-                            <KeyRound className="text-amber-500" size={20} />
+                            <div className="p-2 bg-amber-100 rounded-xl text-amber-600">
+                                <KeyRound size={20} />
+                            </div>
                             Reset PIN
                         </DialogTitle>
                     </DialogHeader>
@@ -363,12 +365,12 @@ export default function DeliveryAgents({ minimal = false }) {
                                 </div>
                             </div>
 
-                            <div className="flex gap-2">
-                                <Button variant="ghost" onClick={() => setResetPinDialog(false)} className="flex-1">Cancel</Button>
+                            <div className="flex flex-col sm:flex-row gap-3 pt-2">
+                                <Button variant="ghost" onClick={() => setResetPinDialog(false)} className="flex-1 h-14 sm:h-12 rounded-2xl font-bold order-2 sm:order-1">Cancel</Button>
                                 <Button
                                     onClick={handleResetPin}
                                     disabled={resettingPin || !newPin || newPin.length < 4}
-                                    className="bg-amber-500 hover:bg-amber-600 text-white flex-1 disabled:opacity-50"
+                                    className="bg-amber-500 hover:bg-amber-600 text-white flex-1 h-14 sm:h-12 rounded-2xl disabled:opacity-50 font-black shadow-lg shadow-amber-500/20 active:scale-[0.98] transition-all order-1 sm:order-2"
                                 >
                                     {resettingPin ? 'Resetting...' : 'Reset PIN'}
                                 </Button>

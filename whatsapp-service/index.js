@@ -8,7 +8,7 @@
  * - Per-customer state persistence in backend
  */
 
-const { makeWASocket, useMultiFileAuthState, DisconnectReason } = require('@whiskeysockets/baileys');
+const { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } = require('@whiskeysockets/baileys');
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
@@ -19,9 +19,27 @@ const qrcode = require('qrcode-terminal');
 
 dotenv.config();
 
+// i18n message templates
+const { getMessage, isSupported } = require('./messages');
+
 const app = express();
-app.use(cors());
+// Tighten CORS for production
+const corsOptions = {
+    origin: process.env.CORS_ORIGINS ? process.env.CORS_ORIGINS.split(',') : '*',
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-api-key']
+};
+app.use(cors(corsOptions));
 app.use(express.json());
+
+// API Key verification middleware for sensitive endpoints
+function verifyApiKey(req, res, next) {
+    const apiKey = req.headers['x-api-key'];
+    if (!apiKey || apiKey !== SERVICE_API_KEY) {
+        return res.status(401).json({ error: 'Unauthorized: Invalid or missing API key' });
+    }
+    next();
+}
 
 function logTrace(msg) {
     try {
@@ -56,6 +74,7 @@ axios.defaults.timeout = 10000; // 10 seconds timeout
 // Conversation steps - Enhanced flow
 const STEPS = {
     IDLE: 'IDLE',                           // No active conversation
+    AWAITING_LANGUAGE: 'AWAITING_LANGUAGE', // Asking language preference (first contact)
     AWAITING_MENU_CHOICE: 'AWAITING_MENU_CHOICE', // Asking status or new order
     AWAITING_NAME: 'AWAITING_NAME',         // Asking for name (new customer)
     AWAITING_ADDRESS: 'AWAITING_ADDRESS',   // Asking for address (new customer)
@@ -96,11 +115,67 @@ const PAYMENT_STATUS = {
  */
 const vendorClients = new Map();
 
-/**
- * Store for customer conversation states (keyed by vendorId:phoneNumber)
- * This is for quick in-memory access, synced with backend
- */
-const conversationState = new Map();
+// API Helpers for Persistent State (MongoDB via Backend)
+async function getPersistedState(vendorId, phoneNumber) {
+    try {
+        const response = await axios.get(`${FASTAPI_URL}/api/whatsapp/state/${phoneNumber}`, {
+            params: { vendor_id: vendorId }
+        });
+        return response.data;
+    } catch (error) {
+        console.error(`[State] Error getting state for ${phoneNumber}:`, error.message);
+        return { step: STEPS.IDLE, data: {} };
+    }
+}
+
+async function updatePersistedState(vendorId, phoneNumber, step, data) {
+    try {
+        await axios.post(`${FASTAPI_URL}/api/whatsapp/state/${phoneNumber}`, {
+            vendor_id: vendorId,
+            step: step,
+            data: data
+        });
+        const msg = `[State] Updated ${phoneNumber} to ${step}`;
+        console.log(msg);
+        logTrace(msg);
+    } catch (error) {
+        const errorMsg = `[State] Error updating state for ${phoneNumber}: ${error.message}`;
+        console.error(errorMsg);
+        logTrace(errorMsg);
+    }
+}
+
+async function clearPersistedState(vendorId, phoneNumber) {
+    try {
+        await axios.delete(`${FASTAPI_URL}/api/whatsapp/state/${phoneNumber}`, {
+            params: { vendor_id: vendorId }
+        });
+        console.log(`[State] Cleared state for ${phoneNumber}`);
+    } catch (error) {
+        console.error(`[State] Error clearing state for ${phoneNumber}:`, error.message);
+    }
+}
+
+// Health check for all connected vendors (every 2 minutes)
+setInterval(() => {
+    for (const [vendorId, client] of vendorClients.entries()) {
+        if (client.isConnected && client.sock) {
+            try {
+                // Update last activity
+                client.lastHealthCheck = Date.now();
+                console.log(`[Health] Vendor ${vendorId.substring(0, 8)}: Connected ✓`);
+            } catch (error) {
+                console.error(`[Health] Vendor ${vendorId.substring(0, 8)}: Error - ${error.message}`);
+            }
+        }
+    }
+}, 2 * 60 * 1000);
+
+// Save on exit - DISABLED local file persistence
+process.on('SIGINT', () => { process.exit(); });
+process.on('SIGTERM', () => { process.exit(); });
+
+// Auto-save interval removed - using MongoDB persistence in real-time.
 
 /**
  * Delivery queue per staff (keyed by vendorId:staffId)
@@ -148,17 +223,6 @@ function incrementReconnectAttempts(vendorId) {
     reconnectAttempts.set(vendorId, current + 1);
     return current + 1;
 }
-
-// Clean up expired conversation sessions periodically
-setInterval(() => {
-    const now = Date.now();
-    for (const [key, session] of conversationState.entries()) {
-        if (now - session.lastActivity > SESSION_TIMEOUT_MS) {
-            conversationState.delete(key);
-            console.log(`[Session] Expired: ${key}`);
-        }
-    }
-}, 5 * 60 * 1000);
 
 // Health check for all connected vendors (every 2 minutes)
 setInterval(() => {
@@ -214,14 +278,21 @@ async function initVendorWhatsApp(vendorId) {
             const authPath = path.join(__dirname, `auth_info_${vendorId}`);
             const { state: authState, saveCreds } = await useMultiFileAuthState(authPath);
 
+            const { version, isLatest } = await fetchLatestBaileysVersion();
+            console.log(`[Vendor ${vendorId.substring(0, 8)}] using WA v${version.join('.')}, isLatest: ${isLatest}`);
+
             const sock = makeWASocket({
+                version,
                 auth: authState,
                 printQRInTerminal: false,
-                browser: ['Thanni Canuuu', 'Chrome', '1.0.0'],
+                browser: ['Thanni Canuuu', 'Chrome', '120.0.0'],
                 // Improve stability
                 connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 60000,
-                retryRequestDelayMs: 5000
+                keepAliveIntervalMs: 10000,
+                generateHighQualityLinkPreview: true,
+                syncFullHistory: false,
+                markOnlineOnConnect: true
             });
 
             // Initialize client state immediately
@@ -230,105 +301,126 @@ async function initVendorWhatsApp(vendorId) {
                 qrCode: null,
                 isConnected: false,
                 user: null,
-                lastActivity: Date.now()
+                lastActivity: Date.now(),
+                initStartedAt: Date.now()
             });
 
             sock.ev.on('connection.update', async (update) => {
-                const { connection, lastDisconnect, qr } = update;
-                const client = vendorClients.get(vendorId);
+                try {
+                    const { connection, lastDisconnect, qr } = update;
+                    const client = vendorClients.get(vendorId);
 
-                // If client was removed (race condition), ignore updates
-                if (!client || client.sock !== sock) return;
+                    // If client was removed (race condition), ignore updates
+                    if (!client || client.sock !== sock) return;
 
-                logTrace(`[Vendor ${vendorId.substring(0, 8)}] Connection: ${connection} (hasQr: ${!!qr})`);
-                console.log(`[Vendor ${vendorId.substring(0, 8)}] Connection:`, { connection, hasQr: !!qr });
+                    logTrace(`[Vendor ${vendorId.substring(0, 8)}] Connection: ${connection} (hasQr: ${!!qr})`);
+                    console.log(`[Vendor ${vendorId.substring(0, 8)}] Connection:`, { connection, hasQr: !!qr });
 
-                if (qr) {
-                    client.qrCode = qr;
-                    logTrace(`[Vendor ${vendorId.substring(0, 8)}] QR Code received`);
-                    fs.writeFileSync(`qr_${vendorId.substring(0, 8)}.txt`, qr);
-                    console.log(`\n--- VENDOR ${vendorId.substring(0, 8)} QR CODE ---`);
-                    qrcode.generate(qr, { small: true });
-                }
-
-                if (connection === 'close') {
-                    const statusCode = lastDisconnect?.error?.output?.statusCode;
-                    const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-                    client.isConnected = false;
-                    client.qrCode = null;
-
-                    if (shouldReconnect) {
-                        const attempts = incrementReconnectAttempts(vendorId);
-
-                        if (attempts > RECONNECT_SETTINGS.maxRetries) {
-                            console.error(`[Vendor ${vendorId.substring(0, 8)}] Max reconnection attempts (${RECONNECT_SETTINGS.maxRetries}) reached.`);
-                            vendorClients.delete(vendorId);
-                            return;
-                        }
-
-                        const delay = getReconnectDelay(vendorId);
-                        console.log(`[Vendor ${vendorId.substring(0, 8)}] Reconnecting in ${delay / 1000}s (attempt ${attempts}/${RECONNECT_SETTINGS.maxRetries})`);
-
-                        setTimeout(() => initVendorWhatsApp(vendorId), delay);
-                    } else {
-                        console.log(`[Vendor ${vendorId.substring(0, 8)}] Logged out. Removing session.`);
-                        vendorClients.delete(vendorId);
-
-                        // Clean up auth folder
+                    if (qr) {
+                        client.qrCode = qr;
+                        client.qrGeneratedAt = Date.now();
+                        logTrace(`[Vendor ${vendorId.substring(0, 8)}] QR Code received`);
                         try {
-                            fs.rmSync(authPath, { recursive: true, force: true });
-                        } catch (e) { console.error('Error cleaning auth folder:', e); }
+                            fs.writeFileSync(`qr_${vendorId.substring(0, 8)}.txt`, qr);
+                        } catch (e) { /* ignore file write errors */ }
+                        console.log(`\n--- VENDOR ${vendorId.substring(0, 8)} QR CODE ---`);
+                        qrcode.generate(qr, { small: true });
                     }
-                } else if (connection === 'open') {
-                    console.log(`\n✅ [Vendor ${vendorId.substring(0, 8)}] WhatsApp connected!`);
-                    client.qrCode = null;
-                    client.isConnected = true;
-                    client.user = sock.user;
-                    client.connectedAt = Date.now();
 
-                    // Reset reconnection attempts
-                    resetReconnectAttempts(vendorId);
+                    if (connection === 'close') {
+                        const statusCode = lastDisconnect?.error?.output?.statusCode;
+                        const errorMsg = lastDisconnect?.error?.message || 'No error message';
+                        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
+
+                        client.isConnected = false;
+                        client.qrCode = null;
+
+                        logTrace(`[Vendor ${vendorId.substring(0, 8)}] Connection closed. Status: ${statusCode}, Error: ${errorMsg}, ShouldReconnect: ${shouldReconnect}`);
+                        console.log(`[Vendor ${vendorId.substring(0, 8)}] ❌ Connection closed:`, { statusCode, errorMsg, shouldReconnect });
+
+                        if (shouldReconnect) {
+                            const attempts = incrementReconnectAttempts(vendorId);
+
+                            if (attempts > RECONNECT_SETTINGS.maxRetries) {
+                                console.error(`[Vendor ${vendorId.substring(0, 8)}] Max reconnection attempts reached. Cleaning up.`);
+                                vendorClients.delete(vendorId);
+                                return;
+                            }
+
+                            const delay = getReconnectDelay(vendorId);
+                            console.log(`[Vendor ${vendorId.substring(0, 8)}] Reconnecting in ${delay / 1000}s (attempt ${attempts})`);
+
+                            setTimeout(() => initVendorWhatsApp(vendorId).catch(e => {
+                                console.error(`[Vendor ${vendorId.substring(0, 8)}] Reconnect failed:`, e.message);
+                            }), delay);
+                        } else {
+                            console.log(`[Vendor ${vendorId.substring(0, 8)}] Logged out. Removing session.`);
+                            client.isConnected = false;
+                            vendorClients.delete(vendorId);
+
+                            // Clean up auth folder
+                            try {
+                                if (fs.existsSync(authPath)) {
+                                    fs.rmSync(authPath, { recursive: true, force: true });
+                                }
+                            } catch (e) { console.error('Error cleaning auth folder:', e); }
+                        }
+                    } else if (connection === 'open') {
+                        console.log(`\n✅ [Vendor ${vendorId.substring(0, 8)}] WhatsApp connected!`);
+                        client.qrCode = null;
+                        client.isConnected = true;
+                        client.user = sock.user || null;
+                        client.connectedAt = Date.now();
+
+                        // Reset reconnection attempts
+                        resetReconnectAttempts(vendorId);
+                    }
+                } catch (err) {
+                    console.error(`[Vendor ${vendorId.substring(0, 8)}] connection.update error:`, err.message);
                 }
             });
 
             sock.ev.on('messages.upsert', async (m) => {
-                const { messages, type } = m;
-                logTrace(`[Upsert] Event Type: ${type} Count: ${messages.length} Vendor: ${vendorId}`);
+                try {
+                    const { messages, type } = m;
+                    logTrace(`[Upsert] Event Type: ${type} Count: ${messages.length} Vendor: ${vendorId}`);
 
-                if (type === 'notify' || type === 'append') {
-                    for (const message of messages) {
-                        if (!message.message) {
-                            logTrace(`[Upsert] No content message from ${message.key.remoteJid}`);
-                            continue;
-                        }
+                    if (type === 'notify' || type === 'append') {
+                        for (const message of messages) {
+                            if (!message?.message || !message?.key?.remoteJid) {
+                                logTrace(`[Upsert] Invalid/empty message skipped`);
+                                continue;
+                            }
 
-                        if (!message.key.fromMe) {
-                            try {
-                                const isGroup = message.key.remoteJid.endsWith('@g.us');
-                                const fromMe = message.key.fromMe;
-                                const msgType = Object.keys(message.message || {})[0];
+                            if (!message.key.fromMe) {
+                                try {
+                                    const isGroup = message.key.remoteJid.endsWith('@g.us');
+                                    const fromMe = message.key.fromMe;
+                                    const msgType = Object.keys(message.message || {})[0];
 
-                                if (!isGroup && !fromMe) {
-                                    logTrace(`[DIRECT_RAW] From: ${message.key.remoteJid} Type: ${msgType} Content: ${JSON.stringify(message.message).substring(0, 500)}`);
+                                    if (!isGroup && !fromMe) {
+                                        logTrace(`[DIRECT_RAW] From: ${message.key.remoteJid} Type: ${msgType} Content: ${JSON.stringify(message.message).substring(0, 500)}`);
+                                    }
+
+                                    logTrace(`[Upsert] ${isGroup ? 'GROUP' : 'DIRECT'} Msg from ${message.key.remoteJid} Type: ${msgType} Vendor: ${vendorId}`);
+                                    console.log(`[Vendor ${vendorId.substring(0, 8)}] Msg:`, message.key.remoteJid);
+                                    await handleIncomingMessage(vendorId, message);
+                                } catch (err) {
+                                    logTrace(`[Error] Message handler error: ${err.message}`);
+                                    console.error(`[Vendor ${vendorId.substring(0, 8)}] Message handler error:`, err.message);
                                 }
-
-                                logTrace(`[Upsert] ${isGroup ? 'GROUP' : 'DIRECT'} Msg from ${message.key.remoteJid} Type: ${msgType} Vendor: ${vendorId}`);
-                                console.log(`[Vendor ${vendorId.substring(0, 8)}] Msg:`, message.key.remoteJid);
-                                await handleIncomingMessage(vendorId, message);
-                            } catch (err) {
-                                logTrace(`[Error] Message handler error: ${err.message}`);
-                                console.error(`[Vendor ${vendorId.substring(0, 8)}] Message handler error:`, err);
                             }
                         }
                     }
+                } catch (err) {
+                    console.error(`[Vendor ${vendorId.substring(0, 8)}] messages.upsert error:`, err.message);
                 }
             });
 
             sock.ev.on('creds.update', saveCreds);
 
         } catch (error) {
-            console.error(`[Vendor ${vendorId.substring(0, 8)}] Init error:`, error);
+            console.error(`[Vendor ${vendorId.substring(0, 8)}] Init error:`, error.message);
             // Don't auto-retry immediately in loop, let user/frontend retry via polling
             vendorClients.delete(vendorId);
         }
@@ -358,6 +450,13 @@ async function getCustomerByPhone(vendorId, phoneNumber) {
         console.log(`[API] No customer found for ${phoneNumber}`);
         return null;
     }
+}
+
+// Check if address is valid (not missing or "undefined")
+function isAddressValid(customer) {
+    if (!customer || !customer.address) return false;
+    const addr = String(customer.address).toLowerCase().trim();
+    return addr !== '' && addr !== 'undefined' && addr !== 'null';
 }
 
 // Create customer for a specific vendor
@@ -522,6 +621,11 @@ async function getStaffNextDelivery(vendorId, staffId) {
 
 async function handleIncomingMessage(vendorId, message) {
     try {
+        if (!message?.key?.remoteJid) {
+            logTrace(`[Incoming] Skipping message with no remoteJid`);
+            return;
+        }
+
         const remoteJid = message.key.remoteJid;
         logTrace(`[Incoming] RAW: ${remoteJid}`);
 
@@ -533,34 +637,49 @@ async function handleIncomingMessage(vendorId, message) {
         const phoneNumber = remoteJid.split('@')[0];
         const msgContent = message.message;
 
+        if (!msgContent) {
+            logTrace(`[Incoming] No message content from ${remoteJid}`);
+            return;
+        }
+
         // Use robust extraction
         const messageText = getMessageText(msgContent).trim();
 
         logTrace(`[Incoming] From ${phoneNumber}: "${messageText}"`);
         console.log(`[Debug] Incoming from ${phoneNumber}: "${messageText}"`);
 
-        if (!messageText && !msgContent.buttonsResponseMessage && !msgContent.listResponseMessage) {
+        if (!messageText && !msgContent?.buttonsResponseMessage && !msgContent?.listResponseMessage) {
             // Log full message for debugging if it's empty but has something
-            if (Object.keys(msgContent).length > 0) {
+            if (msgContent && Object.keys(msgContent).length > 0) {
                 console.log(`[Debug] Empty text but content:`, JSON.stringify(msgContent).substring(0, 200));
             }
             return;
         }
 
         // Check if delivery staff
-        const staffInfo = await checkIfDeliveryStaff(vendorId, phoneNumber);
+        let staffInfo = null;
+        try {
+            staffInfo = await checkIfDeliveryStaff(vendorId, phoneNumber);
+        } catch (e) {
+            logTrace(`[Debug] Staff check failed for ${phoneNumber}: ${e.message}`);
+        }
         logTrace(`[Debug] Staff check for ${phoneNumber}: ${staffInfo ? 'YES' : 'NO'}`);
 
         if (staffInfo && staffInfo.is_staff) {
             // Fix: Extract staff object correctly
             const staffObj = staffInfo.staff || staffInfo;
-            // Try to handle as staff message first
-            const handled = await handleDeliveryStaffMessage(vendorId, remoteJid, messageText, staffObj);
+            try {
+                // Try to handle as staff message first
+                const handled = await handleDeliveryStaffMessage(vendorId, remoteJid, messageText, staffObj);
 
-            // If handled (was a staff command like '1', '2', '3'), stop here
-            if (handled) {
-                logTrace(`[Incoming] Handled as staff command`);
-                return;
+                // If handled (was a staff command like '1', '2', '3'), stop here
+                if (handled) {
+                    logTrace(`[Incoming] Handled as staff command`);
+                    return;
+                }
+            } catch (staffErr) {
+                logTrace(`[Error] Staff handler failed: ${staffErr.message}`);
+                console.error('[Error] Staff handler:', staffErr.message);
             }
             // If NOT handled (e.g., "Hi"), proceed to customer flow below
             logTrace(`[Incoming] Staff number but not a command, falling back to customer`);
@@ -574,7 +693,7 @@ async function handleIncomingMessage(vendorId, message) {
 
     } catch (error) {
         logTrace(`[Error] handleIncomingMessage: ${error.message}`);
-        console.error('[Error] handleIncomingMessage:', error);
+        console.error('[Error] handleIncomingMessage:', error.message);
     }
 }
 
@@ -591,9 +710,19 @@ async function handleDeliveryStaffMessage(vendorId, remoteJid, messageText, staf
     const phoneNumber = remoteJid.split('@')[0];
     const text = messageText.toLowerCase().trim();
 
-    // Send helper function
+    // Send helper function with full safety
     const send = async (msg) => {
-        await client.sock.sendMessage(jid, { text: msg });
+        try {
+            if (!msg || !client?.sock) return;
+            if (client.sock.authState?.creds?.me?.id) {
+                await client.sock.sendMessage(jid, { text: msg });
+            } else {
+                logTrace(`[Staff] Socket not authenticated for ${vendorId.substring(0, 8)}, skipping send`);
+            }
+        } catch (e) {
+            logTrace(`[Error] Staff send failed to ${jid}: ${e.message}`);
+            console.error(`[Error] Staff send failed:`, e.message);
+        }
     };
 
     // Find staff's latest pending order
@@ -660,12 +789,12 @@ async function handleDeliveryStaffMessage(vendorId, remoteJid, messageText, staf
     if (doneMatch) {
         const orderId = doneMatch[2].toUpperCase();
         try {
-            await axios.patch(`${FASTAPI_URL}/api/orders/${orderId}/status`, null, {
-                params: { status: 'delivered' }
+            await axios.post(`${FASTAPI_URL}/api/orders/${orderId}/delivery/complete`, null, {
+                params: { vendor_id: vendorId, payment_status: PAYMENT_STATUS.PENDING }
             });
             await send(`✅ Order ${orderId} marked as delivered!`);
         } catch (error) {
-            await send(`❌ Could not update ${orderId}`);
+            await send(`❌ Could not update ${orderId}: ${error.response?.data?.detail || error.message}`);
         }
         return true;
     }
@@ -675,16 +804,17 @@ async function handleDeliveryStaffMessage(vendorId, remoteJid, messageText, staf
     if (paidMatch) {
         const orderId = paidMatch[1].toUpperCase();
         const method = paidMatch[2]?.toLowerCase() || 'cash';
+        const paymentStatus = method === 'upi' ? PAYMENT_STATUS.PAID_UPI : PAYMENT_STATUS.PAID_CASH;
         try {
-            await axios.patch(`${FASTAPI_URL}/api/orders/${orderId}/payment`, null, {
+            await axios.post(`${FASTAPI_URL}/api/orders/${orderId}/delivery/complete`, null, {
                 params: {
-                    payment_status: method === 'upi' ? 'paid_upi' : 'paid_cash',
-                    payment_method: method
+                    vendor_id: vendorId,
+                    payment_status: paymentStatus
                 }
             });
             await send(`✅ ${orderId} marked PAID (${method})!`);
         } catch (error) {
-            await send(`❌ Could not update ${orderId}`);
+            await send(`❌ Could not update ${orderId}: ${error.response?.data?.detail || error.message}`);
         }
         return true;
     }
@@ -744,8 +874,12 @@ async function sendCustomerPaymentRequest(vendorId, customerPhone, order) {
     }
 
     try {
-        await client.sock.sendMessage(jid, { text: message });
-        logTrace(`[Notification] Delivery notification sent to ${jid}`);
+        if (client?.sock && client.sock.authState?.creds?.me?.id) {
+            await client.sock.sendMessage(jid, { text: message });
+            logTrace(`[Notification] Delivery notification sent to ${jid}`);
+        } else {
+            logTrace(`[Notification] Skipped - Socket not ready for ${jid}`);
+        }
     } catch (e) {
         logTrace(`[Error] Failed to send delivery notification: ${e.message}`);
     }
@@ -762,345 +896,298 @@ async function handleCustomerConversation(vendorId, remoteJid, messageText) {
 
     const jid = remoteJid;
     const phoneNumber = remoteJid.split('@')[0];
-    const sessionKey = `${vendorId}:${phoneNumber}`;
     const text = messageText.toLowerCase().trim();
 
-    // Get or create session
-    let session = conversationState.get(sessionKey) || {
-        step: STEPS.IDLE,
-        lastActivity: Date.now(),
-        data: {}
-    };
+    // Get persisted state from MongoDB (Phase 4)
+    let session = await getPersistedState(vendorId, phoneNumber);
+    let lang = session.data?.lang || 'ta';
 
+    logTrace(`[CustomerFlow] From: ${phoneNumber} Step: ${session.step} Text: "${text}" Vendor: ${vendorId.substring(0, 8)}`);
+
+    // Phase 5: Log initial state
+    console.log(`[Flow] Current State: ${session.step}`);
+
+    // Update activity locally (will be saved on next updatePersistedState)
     session.lastActivity = Date.now();
-    logTrace(`[Customer] Flow: ${sessionKey} Step: ${session.step} Text: "${text}"`);
+    logTrace(`[Customer] Flow: ${phoneNumber} Step: ${session.step} Text: "${text}"`);
+
+    // Helper to update state in DB
+    const updateState = async (newStep, newData = null) => {
+        const step = newStep || session.step;
+        const data = newData || session.data;
+        console.log(`[Flow] STATE UPDATED TO: ${step} for ${phoneNumber}`);
+        await updatePersistedState(vendorId, phoneNumber, step, data);
+    };
 
     // Send helper function
     const send = async (msg) => {
         try {
+            if (!client?.sock || !msg) return;
             logTrace(`[Outgoing] To ${jid}: "${msg.substring(0, 50)}..."`);
-            await client.sock.sendMessage(jid, { text: msg });
-            logTrace(`[Outgoing] SENT successfully to ${jid}`);
+            if (client.sock.authState?.creds?.me?.id) {
+                await client.sock.sendMessage(jid, { text: msg });
+                logTrace(`[Outgoing] SENT successfully to ${jid}`);
+            } else {
+                logTrace(`[Error] Socket not authenticated/ready for ${vendorId}`);
+            }
         } catch (e) {
             logTrace(`[Error] Send failed to ${jid}: ${e.message}`);
             console.error(`[Error] Send failed to ${jid}:`, e.message);
         }
     };
 
-    // Get prices
-    const prices = await getProductPrices(vendorId) || {};
-    const price20L = prices['20L'] || 50;
-    const price25L = prices['25L'] || 65;
-    logTrace(`[Customer] Prices fetched: 20L=₹${price20L}, 25L=₹${price25L}`);
+    // ============================================
+    // CUSTOMER DATA & LANGUAGE
+    // ============================================
+    let customer = await getCustomerByPhone(vendorId, phoneNumber);
+    lang = (customer && customer.preferred_language) || session.data.lang || 'en';
+    session.data.lang = lang;
 
     // ============================================
-    // Handle payment response if waiting
+    // STATE MACHINE (Phases 3 & 7)
     // ============================================
-    if (session.step === STEPS.AWAITING_PAYMENT_CHOICE) {
-        if (text === '1' || text.includes('upi')) {
-            // Customer chose UPI
-            try {
-                const result = await handleCustomerPaymentResponse(vendorId, session.data.orderId, 'upi');
-                if (result.vendor_upi) {
-                    await send(
-                        `🙏 Please send ₹${result.amount} to:\n\n` +
-                        `*UPI ID:* ${result.vendor_upi}\n\n` +
-                        `Thank you! We'll confirm once received.`
-                    );
-                } else {
-                    await send(
-                        `🙏 Please complete UPI payment of ₹${result.amount}.\n\n` +
-                        `Contact us for UPI details.\n` +
-                        `Thank you!`
-                    );
-                }
-            } catch (error) {
-                await send(`Sorry, something went wrong. Please try again.`);
-            }
-            conversationState.delete(sessionKey);
-            return;
-        } else if (text === '2' || text.includes('cash')) {
-            // Customer chose cash
-            try {
-                await handleCustomerPaymentResponse(vendorId, session.data.orderId, 'cash');
-                await send(
-                    `Thank you! 🙏\n\n` +
-                    `Our staff will collect ₹${session.data.amount} soon.\n` +
-                    `Have a great day!`
-                );
-            } catch (error) {
-                await send(`Sorry, something went wrong. Please try again.`);
-            }
-            conversationState.delete(sessionKey);
-            return;
-        } else {
-            await send(`Please reply *1* for UPI or *2* for Cash.`);
-            conversationState.set(sessionKey, session);
-            return;
-        }
+
+    // Handle Language Prompt (Start of Flow)
+    if (session.step === STEPS.IDLE && (!customer || !customer.preferred_language)) {
+        await updateState(STEPS.AWAITING_LANGUAGE, { ...session.data, langSet: false });
+        await send(getMessage('en', 'languagePrompt'));
+        return;
     }
 
-    // ============================================
-    // Handle menu choice (status vs new order)
-    // ============================================
-    if (session.step === STEPS.AWAITING_MENU_CHOICE) {
-        if (text === '1' || text.includes('status')) {
-            // Customer wants to check order status
-            const orderInfo = await getCustomerLatestOrder(vendorId, phoneNumber);
-
-            if (orderInfo.order) {
-                const order = orderInfo.order;
-                const statusEmoji = {
-                    'pending': '⏳ In queue',
-                    'in_queue': '📋 In queue',
-                    'assigned': '👤 Assigned',
-                    'out_for_delivery': '🚚 Out for delivery',
-                    'delivered': '✅ Delivered',
-                    'delayed': '⚠️ Delayed',
-                    'cancelled': '❌ Cancelled'
-                };
-
-                await send(
-                    `📦 *Your Last Order*\n\n` +
-                    `Order ID: ${order.order_id}\n` +
-                    `• ${order.quantity} × ${order.litre_size}L cans\n` +
-                    `• Amount: ₹${order.amount}\n` +
-                    `• Status: ${statusEmoji[order.status] || order.status}\n` +
-                    (order.status !== 'delivered' ? `\nExpected today 🚚` : `\nDelivered on ${new Date(order.delivered_at).toLocaleDateString()}`) +
-                    `\n\nThank you! 💧`
-                );
-            } else {
-                await send(`No recent orders found.\n\nSend *Hi* to place a new order! 👋`);
-            }
-
-            conversationState.delete(sessionKey);
-            return;
-        } else if (text === '2' || text.includes('new') || text.includes('order')) {
-            // Customer wants to place new order - start order flow
-            session.step = STEPS.AWAITING_CAN_TYPE;
-            await send(`Which can do you need?\n*20L* / *25L* / *Both*`);
-            conversationState.set(sessionKey, session);
-            return;
-        } else {
-            const statusMsg = `Hi 👋 Welcome to Thanni Canuuu! 💧\n\nPlease reply *1* for order status or *2* for new order.`;
-            await send(statusMsg);
-            conversationState.set(sessionKey, session);
-            return;
-        }
-    }
-
-    // ============================================
-    // Handle based on current step
-    // ============================================
+    // Process State Transitions
     switch (session.step) {
 
+        case STEPS.AWAITING_LANGUAGE:
+            let selectedLang = null;
+            if (text === '1' || text.includes('tamil') || text.includes('தமிழ்')) {
+                selectedLang = 'ta';
+            } else if (text === '2' || text.includes('english')) {
+                selectedLang = 'en';
+            }
+
+            if (selectedLang) {
+                session.data.lang = selectedLang;
+                session.data.langSet = true;
+
+                // Save language preference to backend
+                try {
+                    await axios.put(
+                        `${FASTAPI_URL}/api/customers/${phoneNumber}/language`,
+                        { preferred_language: selectedLang, vendor_id: vendorId }
+                    );
+                } catch (e) { console.error('[i18n] Language save failed', e.message); }
+
+                // Check if we need name or address (new or incomplete customer)
+                if (!customer || !customer.name || customer.name === 'Customer') {
+                    await updateState(STEPS.AWAITING_NAME, session.data);
+                    await send(getMessage(selectedLang, 'welcomeNew'));
+                } else if (!isAddressValid(customer)) {
+                    await updateState(STEPS.AWAITING_ADDRESS, { ...session.data, name: customer.name });
+                    await send(getMessage(selectedLang, 'askAddress', customer.name));
+                } else {
+                    await updateState(STEPS.IDLE, session.data);
+                    // Fall through to IDLE logic for returning customer
+                    await handleCustomerConversation(vendorId, remoteJid, 'hi'); // Re-trigger greeting
+                }
+            } else {
+                await send(getMessage('en', 'languagePrompt'));
+            }
+            return;
+
+        case STEPS.AWAITING_NAME:
+            if (text.length < 2) {
+                await send(getMessage(lang, 'welcomeNew'));
+                return;
+            }
+            session.data.name = messageText.trim();
+            await updateState(STEPS.AWAITING_ADDRESS, session.data);
+            await send(getMessage(lang, 'askAddress', session.data.name));
+            return;
+
+        case STEPS.AWAITING_ADDRESS:
+            if (text.length < 5) {
+                await send(getMessage(lang, 'askAddress', session.data.name));
+                return;
+            }
+            session.data.address = messageText.trim();
+
+            // Create customer record in DB
+            customer = await createCustomer(vendorId, phoneNumber, session.data.name, session.data.address);
+
+            await updateState(STEPS.AWAITING_CAN_TYPE, session.data);
+            await send(getMessage(lang, 'addressSaved') + '\n\n' + getMessage(lang, 'chooseLitre', '...'));
+            return;
+
         case STEPS.IDLE:
-            // Any greeting starts the flow
-            if (['hi', 'hello', 'order', 'start', 'hii', 'hey'].includes(text) || text.length > 0) {
-                // Check if returning customer with existing orders
-                const customer = await getCustomerByPhone(vendorId, phoneNumber);
+            // Check for order/status keywords
+            if (['hi', 'hello', 'hey', 'start', 'வணக்கம்', 'hi', 'start'].includes(text)) {
                 const activeOrderInfo = await getCustomerActiveOrder(vendorId, phoneNumber);
 
                 if (activeOrderInfo.has_active_order) {
-                    // Customer has active order - show menu
-                    session.data.customer = customer;
-                    session.data.name = customer?.name;
-                    session.data.address = customer?.address;
-                    session.step = STEPS.AWAITING_MENU_CHOICE;
-
+                    await updateState(STEPS.AWAITING_MENU_CHOICE, session.data);
                     const order = activeOrderInfo.order;
-                    const welcomeMsg =
-                        `Hi ${customer?.name || 'there'}! 👋 Welcome to Thanni Canuuu! 💧\n\n` +
-                        `You have an active order:\n` +
-                        `• ${order.quantity} × ${order.litre_size}L (₹${order.amount})\n` +
-                        `• Status: ${order.status === 'pending' ? '⏳ In queue' : '🚚 On the way'}\n\n` +
-                        `What would you like to do?\n\n` +
-                        `*1* - Check my order status\n` +
-                        `*2* - Place a new order\n\n` +
-                        `Reply with 1 or 2.`;
-                    await send(welcomeMsg);
-                } else if (customer && customer.name && customer.address) {
-                    // Returning customer with no active order
-                    session.data.customer = customer;
+                    await send(getMessage(lang, 'activeOrderMenu',
+                        customer?.name || (lang === 'ta' ? 'அன்பரே' : 'there'),
+                        order.quantity,
+                        order.litre_size,
+                        order.amount,
+                        getMessage(lang, 'localizeStatus', order.status)
+                    ));
+                } else {
+                    // Check if address is missing/undefined for returning customer
+                    if (!isAddressValid(customer)) {
+                        await updateState(STEPS.AWAITING_ADDRESS, { ...session.data, name: customer?.name });
+                        await send(getMessage(lang, 'askAddress', customer?.name || (lang === 'ta' ? 'அன்பரே' : 'Customer')));
+                        return;
+                    }
+
+                    // Sync customer data to session
                     session.data.name = customer.name;
                     session.data.address = customer.address;
-                    session.step = STEPS.AWAITING_CAN_TYPE;
 
-                    await send(`Hi ${customer.name}! 👋 Welcome to Thanni Canuuu! 💧\n\nWhich can do you need?\n*20L* / *25L* / *Both*`);
-                } else {
-                    // New customer - ask name
-                    session.step = STEPS.AWAITING_NAME;
-                    await send(`Hi 👋 Welcome to Thanni Canuuu! 💧\n\nMay I know your name?`);
+                    await updateState(STEPS.AWAITING_CAN_TYPE, session.data);
+                    await send(`${getMessage(lang, 'welcome', customer?.name)}\n\n${getMessage(lang, 'chooseLitre', '...')}`);
                 }
+                return;
+            } else if (['order', 'water', 'can', 'ஆர்டர்', 'தண்ணீர்'].includes(text)) {
+                if (!isAddressValid(customer)) {
+                    await updateState(STEPS.AWAITING_ADDRESS, { ...session.data, name: customer?.name });
+                    await send(getMessage(lang, 'askAddress', customer?.name || (lang === 'ta' ? 'அன்பரே' : 'Customer')));
+                    return;
+                }
+
+                // Sync customer data to session
+                session.data.name = customer.name;
+                session.data.address = customer.address;
+
+                await updateState(STEPS.AWAITING_CAN_TYPE, session.data);
+                await send(getMessage(lang, 'chooseLitre', '...'));
+                return;
+            } else if (['status', 'check', 'நிலை'].includes(text)) {
+                const orderInfo = await getCustomerLatestOrder(vendorId, phoneNumber);
+                if (orderInfo.order) {
+                    const order = orderInfo.order;
+                    await send(getMessage(lang, 'orderStatus',
+                        order.order_id,
+                        `${order.quantity} x ${order.litre_size}L`,
+                        getMessage(lang, 'localizeStatus', order.status)
+                    ));
+                } else {
+                    await send(getMessage(lang, 'noRecentOrders'));
+                }
+                return;
             }
             break;
 
-        case STEPS.AWAITING_NAME:
-            // Capture name
-            session.data.name = messageText.trim();
-            session.step = STEPS.AWAITING_ADDRESS;
-            await send(`Thanks ${session.data.name}! 😊\n\nPlease share your delivery address.`);
-            break;
-
-        case STEPS.AWAITING_ADDRESS:
-            // Capture address and save customer
-            session.data.address = messageText.trim();
-
-            // Save customer to DB
-            await createCustomer(vendorId, phoneNumber, session.data.name, session.data.address);
-
-            session.step = STEPS.AWAITING_CAN_TYPE;
-            await send(`Great! 📍 Address saved.\n\nWhich can do you need?\n*20L* / *25L* / *Both*`);
-            break;
+        case STEPS.AWAITING_MENU_CHOICE:
+            if (text === '1') {
+                const orderInfo = await getCustomerLatestOrder(vendorId, phoneNumber);
+                if (orderInfo.order) {
+                    const order = orderInfo.order;
+                    await send(getMessage(lang, 'orderStatus',
+                        order.order_id,
+                        `${order.quantity} x ${order.litre_size}L`,
+                        getMessage(lang, 'localizeStatus', order.status),
+                        order.amount
+                    ));
+                }
+                await updateState(STEPS.IDLE, session.data);
+            } else if (text === '2') {
+                await updateState(STEPS.AWAITING_CAN_TYPE, session.data);
+                await send(getMessage(lang, 'chooseLitre', '...'));
+            } else {
+                await send(getMessage(lang, 'menuChoicePrompt'));
+            }
+            return;
 
         case STEPS.AWAITING_CAN_TYPE:
-            // Parse can type
-            if (text.includes('20') && text.includes('25') || text.includes('both')) {
-                // Both types
-                session.data.canType = 'both';
-                session.step = STEPS.AWAITING_QTY_20L;
-                await send(`How many *20L* cans?`);
-            } else if (text.includes('20') || text === '1') {
+            const prices = await getProductPrices(vendorId);
+            if (text.includes('20') || text === '1') {
                 session.data.canType = '20';
-                session.step = STEPS.AWAITING_QTY_20L;
-                await send(`How many *20L* cans?`);
+                await updateState(STEPS.AWAITING_QTY_20L, session.data);
+                await send(getMessage(lang, 'chooseQuantity', 20, prices['20L'] || 50, '...'));
             } else if (text.includes('25') || text === '2') {
                 session.data.canType = '25';
-                session.step = STEPS.AWAITING_QTY_25L;
-                await send(`How many *25L* cans?`);
+                await updateState(STEPS.AWAITING_QTY_25L, session.data);
+                await send(getMessage(lang, 'chooseQuantity', 25, prices['25L'] || 65, '...'));
             } else {
-                await send(`Please reply: *20L*, *25L*, or *Both*`);
+                await send(getMessage(lang, 'chooseLitre', '...'));
             }
-            break;
+            return;
 
         case STEPS.AWAITING_QTY_20L:
-            const qty20 = parseInt(text);
-            if (isNaN(qty20) || qty20 < 1 || qty20 > 50) {
-                await send(`Please enter a number (1-50)`);
-                break;
-            }
-            session.data.qty20L = qty20;
-
-            if (session.data.canType === 'both') {
-                session.step = STEPS.AWAITING_QTY_25L;
-                await send(`How many *25L* cans?`);
-            } else {
-                // Single type - confirm
-                session.step = STEPS.AWAITING_CONFIRM;
-                const total = qty20 * price20L;
-                await send(
-                    `📋 *Order Summary*\n\n` +
-                    `${qty20} × 20L = ₹${total}\n` +
-                    `📍 ${session.data.address}\n\n` +
-                    `Confirm? *YES* / *NO*`
-                );
-            }
-            break;
-
         case STEPS.AWAITING_QTY_25L:
-            const qty25 = parseInt(text);
-            if (isNaN(qty25) || qty25 < 1 || qty25 > 50) {
-                await send(`Please enter a number (1-50)`);
-                break;
-            }
-            session.data.qty25L = qty25;
-            session.step = STEPS.AWAITING_CONFIRM;
-
-            // Build summary
-            let summary = `📋 *Order Summary*\n\n`;
-            let total = 0;
-
-            if (session.data.qty20L > 0) {
-                const sub20 = session.data.qty20L * price20L;
-                summary += `${session.data.qty20L} × 20L = ₹${sub20}\n`;
-                total += sub20;
-            }
-            const sub25 = qty25 * price25L;
-            summary += `${qty25} × 25L = ₹${sub25}\n`;
-            total += sub25;
-
-            summary += `\n*Total: ₹${total}*\n`;
-            summary += `📍 ${session.data.address}\n\n`;
-            summary += `Confirm? *YES* / *NO*`;
-
-            await send(summary);
-            break;
-
-        case STEPS.AWAITING_CONFIRM:
-            // Prevent duplicate processing if user sends YES multiple times
-            if (session.isCreatingOrder) {
-                logTrace(`[Customer] Duplicate confirm ignored for ${phoneNumber}`);
+            const qty = parseInt(text);
+            const litre = session.step === STEPS.AWAITING_QTY_20L ? 20 : 25;
+            if (isNaN(qty) || qty < 1 || qty > 10) {
+                await send(getMessage(lang, 'invalidQuantity'));
                 return;
             }
 
-            if (['yes', 'y', 'confirm', 'ok', 'haan', 'ha'].includes(text)) {
-                try {
-                    // Mark as processing to handle "Double Yes"
-                    session.isCreatingOrder = true;
-                    conversationState.set(sessionKey, session);
+            session.data[litre === 20 ? 'qty20L' : 'qty25L'] = qty;
+            const itemPrices = await getProductPrices(vendorId);
+            const total = qty * (itemPrices[`${litre}L`] || (litre === 20 ? 50 : 65));
 
-                    // Build order items
-                    const items = [];
-                    if (session.data.qty20L > 0) {
-                        items.push({
-                            litre_size: 20,
-                            quantity: session.data.qty20L,
-                            price_per_can: price20L
-                        });
-                    }
-                    if (session.data.qty25L > 0) {
-                        items.push({
-                            litre_size: 25,
-                            quantity: session.data.qty25L,
-                            price_per_can: price25L
-                        });
-                    }
-
-                    // Create order
-                    const result = await createOrder(vendorId, {
-                        customer_phone: phoneNumber,
-                        customer_name: session.data.name,
-                        customer_address: session.data.address,
-                        items: items
-                    });
-
-                    await send(
-                        `✅ *Order Confirmed!*\n\n` +
-                        `Order ID: ${result.order_id}\n` +
-                        `Amount: ₹${result.total_amount}\n\n` +
-                        `Your order will be delivered soon! 🚚\n\n` +
-                        `Send *1* anytime to check status.`
-                    );
-
-                    // Clear session
-                    conversationState.delete(sessionKey);
-
-                } catch (error) {
-                    const errMsg = error.response?.data?.detail || 'Something went wrong';
-                    await send(`❌ Sorry, couldn't process order.\n${errMsg}\n\nPlease try again.`);
-                    conversationState.delete(sessionKey);
-                }
-            } else if (['no', 'n', 'cancel', 'nahi'].includes(text)) {
-                await send(`❌ Order cancelled.\n\nSend *Hi* to start again.`);
-                conversationState.delete(sessionKey);
-            } else {
-                // Not YES/NO, re-confirm once
-                if (!session.confirmPromptSent) {
-                    await send(`Reply *YES* to confirm or *NO* to cancel.`);
-                    session.confirmPromptSent = true;
-                    conversationState.set(sessionKey, session);
+            // Final check on address before summary
+            if (!session.data.address || session.data.address === 'undefined') {
+                if (customer && isAddressValid(customer)) {
+                    session.data.address = customer.address;
+                } else {
+                    await updateState(STEPS.AWAITING_ADDRESS, { ...session.data, name: session.data.name || customer?.name });
+                    await send(getMessage(lang, 'askAddress', session.data.name || customer?.name || 'Customer'));
+                    return;
                 }
             }
-            return; // Don't fall through to IDLE
 
-        default:
-            session.step = STEPS.IDLE;
-            await send(`Send *Hi* to place an order! 👋`);
+            await updateState(STEPS.AWAITING_CONFIRM, session.data);
+            await send(getMessage(lang, 'orderSummary', qty, litre, total, session.data.address));
+            return;
+
+        case STEPS.AWAITING_CONFIRM:
+            if (['yes', 'y', 'confirm', 'ok'].includes(text)) {
+                try {
+                    const finalPrices = await getProductPrices(vendorId);
+                    const finalItems = [];
+                    if (session.data.qty20L) finalItems.push({ litre_size: 20, quantity: session.data.qty20L, price_per_can: finalPrices['20L'] });
+                    if (session.data.qty25L) finalItems.push({ litre_size: 25, quantity: session.data.qty25L, price_per_can: finalPrices['25L'] });
+
+                    const order = await createOrder(vendorId, {
+                        customer_phone: phoneNumber,
+                        customer_name: session.data.name || customer?.name || 'Customer',
+                        customer_address: session.data.address || customer?.address || 'Address missing',
+                        items: finalItems
+                    });
+
+                    console.log(`[Order] Success Response:`, order);
+                    await send(getMessage(lang, 'orderConfirmedFinal', order.order_id, order.total_amount));
+                    await clearPersistedState(vendorId, phoneNumber);
+                } catch (e) {
+                    const errorDetail = e.response?.data?.detail || e.message;
+                    logTrace(`[Error] Order creation failed for ${phoneNumber}: ${errorDetail}`);
+                    console.error(`[Order] Creation failed:`, errorDetail);
+
+                    // Specific message for no staff
+                    if (errorDetail.includes('staff')) {
+                        await send(getMessage(lang, 'noStaff'));
+                    } else if (errorDetail.includes('stock')) {
+                        await send(getMessage(lang, 'outOfStock'));
+                    } else {
+                        await send(getMessage(lang, 'orderFailed') + (errorDetail ? `\n\nError: ${errorDetail}` : ''));
+                    }
+                    await updateState(STEPS.IDLE, session.data);
+                }
+            } else if (['no', 'n', 'cancel'].includes(text)) {
+                await send(getMessage(lang, 'orderCancelled'));
+                await clearPersistedState(vendorId, phoneNumber);
+            } else {
+                await send(getMessage(lang, 'yesNoPrompt'));
+            }
+            return;
     }
 
-    // Save session (if not deleted/returned)
-    if (conversationState.has(sessionKey)) {
-        conversationState.set(sessionKey, session);
+    // Default catch-all
+    if (session.step !== STEPS.IDLE) {
+        await send(getMessage(lang, 'didNotUnderstand'));
     }
 }
 
@@ -1110,9 +1197,16 @@ async function handleCustomerConversation(vendorId, remoteJid, messageText) {
 
 // Health check
 app.get('/health', (req, res) => {
+    let connectedCount = 0;
+    for (const [, client] of vendorClients.entries()) {
+        if (client.isConnected) connectedCount++;
+    }
     res.json({
         status: 'ok',
         activeVendors: vendorClients.size,
+        connectedVendors: connectedCount,
+        uptime: process.uptime(),
+        memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
         timestamp: new Date().toISOString()
     });
 });
@@ -1143,28 +1237,78 @@ app.get('/status/:vendorId', async (req, res) => {
 // Get QR code for a vendor
 app.get('/qr/:vendorId', async (req, res) => {
     const { vendorId } = req.params;
-
     let client = vendorClients.get(vendorId);
 
+    // If no client exists, start initialization
     if (!client) {
-        await initVendorWhatsApp(vendorId);
-        await new Promise(resolve => setTimeout(resolve, 2000));
-        client = vendorClients.get(vendorId);
-    }
-
-    if (!client) {
-        return res.json({ qr: null, error: 'Could not initialize WhatsApp' });
+        console.log(`[QR] No client for ${vendorId.substring(0, 8)}, starting init...`);
+        initVendorWhatsApp(vendorId).catch(err => console.error(`[QR] Init failed for ${vendorId.substring(0, 8)}:`, err.message));
+        return res.json({ qr: null, status: 'initializing', message: 'Starting WhatsApp initialization... Please retry in a few seconds.' });
     }
 
     if (client.isConnected) {
-        return res.json({ qr: null, connected: true });
+        return res.json({ qr: null, connected: true, status: 'connected' });
     }
 
-    res.json({ qr: client.qrCode });
+    // If client exists but has stale state (no QR, no connection, init started > 30s ago)
+    const initAge = Date.now() - (client.initStartedAt || 0);
+    const qrAge = Date.now() - (client.qrGeneratedAt || 0);
+    if (!client.qrCode && !client.isConnected && initAge > 30000) {
+        console.log(`[QR] Client stale for ${vendorId.substring(0, 8)} (age: ${Math.round(initAge / 1000)}s), re-initializing...`);
+        // Clean up stale client and retry
+        try { client.sock?.end(undefined); } catch (e) { }
+        vendorClients.delete(vendorId);
+        resetReconnectAttempts(vendorId);
+        initVendorWhatsApp(vendorId).catch(err => console.error(`[QR] Re-init failed:`, err.message));
+        return res.json({ qr: null, status: 'initializing', message: 'Reconnecting... Please retry in a few seconds.' });
+    }
+
+    if (!client.qrCode) {
+        return res.json({ qr: null, status: 'pending', message: 'Generating QR code... Please wait.' });
+    }
+
+    // QR codes expire after ~60s, if older than 45s, flag it
+    if (qrAge > 45000) {
+        return res.json({ qr: client.qrCode, status: 'ready', warning: 'QR may be expiring soon, scan quickly or refresh.' });
+    }
+
+    res.json({ qr: client.qrCode, status: 'ready' });
 });
 
-// Initialize WhatsApp for a vendor
-app.post('/init/:vendorId', async (req, res) => {
+// Reset WhatsApp session (Force Logout & Clear Audio Folders)
+app.post('/reset/:vendorId', verifyApiKey, async (req, res) => {
+    const { vendorId } = req.params;
+    console.log(`[Reset] Force reset requested for vendor ${vendorId}`);
+
+    const client = vendorClients.get(vendorId);
+    if (client?.sock) {
+        try {
+            client.sock.logout();
+            client.sock.end(undefined);
+        } catch (e) { }
+    }
+
+    vendorClients.delete(vendorId);
+
+    // Delete session folder
+    const authPath = path.join(__dirname, `auth_info_${vendorId}`);
+    try {
+        if (fs.existsSync(authPath)) {
+            // Give a small delay for file handles to release
+            await new Promise(resolve => setTimeout(resolve, 500));
+            fs.rmSync(authPath, { recursive: true, force: true });
+            console.log(`[Reset] Deleted session folder: ${authPath}`);
+        }
+    } catch (e) {
+        console.error(`[Reset] Error deleting folder: ${e.message}`);
+        return res.status(500).json({ error: 'Failed to delete session files. They might be in use.' });
+    }
+
+    res.json({ success: true, message: 'Session reset. You can now re-initialize.' });
+});
+
+// Initialize WhatsApp for a vendor (protected)
+app.post('/init/:vendorId', verifyApiKey, async (req, res) => {
     const { vendorId } = req.params;
 
     if (vendorClients.has(vendorId)) {
@@ -1176,7 +1320,7 @@ app.post('/init/:vendorId', async (req, res) => {
 });
 
 // Disconnect WhatsApp
-app.post('/disconnect/:vendorId', async (req, res) => {
+app.post('/disconnect/:vendorId', verifyApiKey, async (req, res) => {
     const { vendorId } = req.params;
     const client = vendorClients.get(vendorId);
 
@@ -1201,7 +1345,7 @@ app.post('/disconnect/:vendorId', async (req, res) => {
 });
 
 // Reconnect WhatsApp
-app.post('/reconnect/:vendorId', async (req, res) => {
+app.post('/reconnect/:vendorId', verifyApiKey, async (req, res) => {
     const { vendorId } = req.params;
     const client = vendorClients.get(vendorId);
 
@@ -1215,7 +1359,7 @@ app.post('/reconnect/:vendorId', async (req, res) => {
 });
 
 // Simulate incoming message (for testing)
-app.post('/test/simulate-message/:vendorId', async (req, res) => {
+app.post('/test/simulate-message/:vendorId', verifyApiKey, async (req, res) => {
     const { vendorId } = req.params;
     const { from, text } = req.body;
 
@@ -1242,7 +1386,7 @@ app.post('/test/simulate-message/:vendorId', async (req, res) => {
 });
 
 // Send message (testing)
-app.post('/send/:vendorId', async (req, res) => {
+app.post('/send/:vendorId', verifyApiKey, async (req, res) => {
     const { vendorId } = req.params;
     const { to, message } = req.body;
     const client = vendorClients.get(vendorId);
@@ -1253,8 +1397,12 @@ app.post('/send/:vendorId', async (req, res) => {
 
     try {
         const jid = to.includes('@') ? to : `${to}@s.whatsapp.net`;
-        await client.sock.sendMessage(jid, { text: message });
-        res.json({ success: true });
+        if (client.sock.authState?.creds?.me?.id) {
+            await client.sock.sendMessage(jid, { text: message });
+            res.json({ success: true });
+        } else {
+            res.status(400).json({ success: false, error: 'Socket not authenticated' });
+        }
     } catch (error) {
         res.status(500).json({ success: false, error: error.message });
     }
@@ -1273,29 +1421,11 @@ app.get('/vendors', (req, res) => {
     res.json({ count: vendors.length, vendors });
 });
 
-// Health check endpoint for monitoring
-app.get('/health', (req, res) => {
-    let connectedCount = 0;
-    for (const [, client] of vendorClients.entries()) {
-        if (client.isConnected) connectedCount++;
-    }
-    res.json({
-        status: 'healthy',
-        uptime: process.uptime(),
-        activeVendors: vendorClients.size,
-        connectedVendors: connectedCount,
-        memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
-        timestamp: new Date().toISOString()
-    });
-});
+// Note: Duplicate /health removed - using the one at line 1112
 
 // Legacy endpoints
 app.get('/status', (req, res) => res.json({ message: 'Use /status/:vendorId', activeVendors: vendorClients.size }));
 app.get('/qr', (req, res) => res.json({ message: 'Use /qr/:vendorId', activeVendors: vendorClients.size }));
-
-// ============================================
-// START SERVER
-// ============================================
 
 // ============================================
 // START SERVER
@@ -1308,21 +1438,39 @@ const server = app.listen(PORT, async () => {
     // Auto-load existing sessions
     try {
         const files = fs.readdirSync(__dirname);
-        const authFolders = files.filter(f => f.startsWith('auth_info_') && fs.statSync(path.join(__dirname, f)).isDirectory());
+        const authFolders = files.filter(f => {
+            if (!f.startsWith('auth_info_')) return false;
+            const fullPath = path.join(__dirname, f);
+            try {
+                return fs.statSync(fullPath).isDirectory();
+            } catch (e) {
+                return false;
+            }
+        });
 
         console.log(`\n[Startup] Found ${authFolders.length} existing sessions to restore...`);
 
         for (const folder of authFolders) {
             const vendorId = folder.replace('auth_info_', '');
+            // Skip test vendors
+            if (vendorId === 'test-vendor') {
+                console.log(`[Startup] Skipping test vendor session`);
+                continue;
+            }
             console.log(`[Startup] Restoring session for vendor ${vendorId.substring(0, 8)}...`);
-            // Add slight delay between inits to avoid CPU spike
-            await new Promise(resolve => setTimeout(resolve, 2000));
-            initVendorWhatsApp(vendorId).catch(err => {
-                console.error(`[Startup] Failed to restore ${vendorId}:`, err.message);
-            });
+            // Add delay between inits to avoid CPU spike
+            await new Promise(resolve => setTimeout(resolve, 3000));
+            try {
+                await initVendorWhatsApp(vendorId);
+                console.log(`[Startup] ✅ Session restored for ${vendorId.substring(0, 8)}`);
+            } catch (err) {
+                console.error(`[Startup] ❌ Failed to restore ${vendorId.substring(0, 8)}:`, err.message);
+                // Don't let one failure stop others
+            }
         }
+        console.log(`[Startup] Session restore complete. Active vendors: ${vendorClients.size}`);
     } catch (error) {
-        console.error('[Startup] Error auto-loading sessions:', error);
+        console.error('[Startup] Error auto-loading sessions:', error.message);
     }
 });
 

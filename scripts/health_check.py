@@ -1,60 +1,77 @@
-#!/usr/bin/env python3
 """
-Service Health Check Script
-Checks if all ThanniCanuuu services are running correctly
+ThanniCanuuu Health Check Script
+Run periodically (e.g., every 5 minutes via cron/task scheduler)
+to monitor all services and alert on failures.
 """
 import requests
 import sys
+from datetime import datetime
 
-def check_service(name, url, expected_status=200):
-    """Check if a service is responding"""
+BACKEND_URL = "http://localhost:8000"
+WHATSAPP_URL = "http://localhost:3001"
+LOG_FILE = "health_check.log"
+
+def log(message):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    line = f"[{timestamp}] {message}"
+    print(line)
     try:
-        response = requests.get(url, timeout=5)
-        if response.status_code == expected_status or response.status_code == 200:
-            print(f"✅ {name}: OK (Status: {response.status_code})")
+        with open(LOG_FILE, "a") as f:
+            f.write(line + "\n")
+    except:
+        pass
+
+def check_service(name, url, timeout=10):
+    try:
+        r = requests.get(url, timeout=timeout)
+        if r.status_code == 200:
+            log(f"OK: {name} is healthy ({r.status_code})")
             return True
         else:
-            print(f"⚠️ {name}: Unexpected status {response.status_code}")
+            log(f"WARN: {name} returned {r.status_code}")
             return False
-    except requests.exceptions.ConnectionError:
-        print(f"❌ {name}: Connection refused - Service not running")
+    except requests.ConnectionError:
+        log(f"FAIL: {name} is unreachable at {url}")
         return False
-    except requests.exceptions.Timeout:
-        print(f"❌ {name}: Timeout - Service not responding")
+    except requests.Timeout:
+        log(f"FAIL: {name} timed out after {timeout}s")
         return False
     except Exception as e:
-        print(f"❌ {name}: Error - {str(e)}")
+        log(f"FAIL: {name} error: {e}")
         return False
 
 def main():
-    print("=" * 60)
-    print("ThanniCanuuu Service Health Check")
-    print("=" * 60)
-    print()
+    log("=" * 40)
+    log("Health Check Starting")
     
-    services = [
-        ("Backend API", "http://localhost:8000/api/health"),
-        ("Frontend", "http://localhost:3000"),
-        ("WhatsApp Service", "http://localhost:3001/status"),
-    ]
+    results = {}
     
-    results = []
-    for name, url in services:
-        result = check_service(name, url)
-        results.append(result)
-        print()
+    # Check backend
+    results["backend"] = check_service("Backend API", f"{BACKEND_URL}/api/health")
     
-    print("=" * 60)
-    if all(results):
-        print("✅ All services are running correctly!")
-        sys.exit(0)
-    else:
-        print("❌ Some services are not running properly")
-        print("\nPlease check:")
-        print("1. Backend: python -m uvicorn server:app --host 0.0.0.0 --port 5000 --reload")
-        print("2. Frontend: npm start (in frontend directory)")
-        print("3. WhatsApp: npm start (in whatsapp-service directory)")
+    # Check WhatsApp service
+    results["whatsapp"] = check_service("WhatsApp Service", f"{WHATSAPP_URL}/health")
+    
+    # Check database via backend health
+    try:
+        r = requests.get(f"{BACKEND_URL}/api/health", timeout=10)
+        data = r.json()
+        db_status = data.get("database", "unknown")
+        results["database"] = db_status == "connected"
+        log(f"{'OK' if results['database'] else 'FAIL'}: Database is {db_status}")
+    except:
+        results["database"] = False
+        log("FAIL: Cannot check database status")
+    
+    # Summary
+    all_healthy = all(results.values())
+    log(f"Overall: {'ALL HEALTHY' if all_healthy else 'ISSUES DETECTED'}")
+    log("=" * 40)
+    
+    if not all_healthy:
         sys.exit(1)
+    
+    return 0
 
 if __name__ == "__main__":
     main()

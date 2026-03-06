@@ -5,7 +5,7 @@ import {
   Settings as SettingsIcon, Save, Droplets, ArrowRight, MessageSquare, Users,
   Building2, RotateCcw, Wallet, Zap, CheckCircle2, Plus, Minus, Layout, Store,
   Type, Shield, Smartphone, Lock, AlertTriangle, Trash2, Camera, RefreshCw,
-  ChevronRight, Menu, X
+  ChevronRight, Menu, X, Bell, Volume2, BellRing, CreditCard, Package
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -32,6 +32,17 @@ export default function Settings() {
   const fileInputRef = useRef(null);
   const navigate = useNavigate();
 
+  // Notification preferences state
+  const [notifPrefs, setNotifPrefs] = useState({
+    order_alerts: true,
+    payment_alerts: true,
+    system_alerts: true,
+    sound_enabled: true,
+    push_enabled: true
+  });
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifSaving, setNotifSaving] = useState(null);
+
   useEffect(() => {
     setEditCompanyName(companyName || '');
   }, [companyName]);
@@ -44,7 +55,35 @@ export default function Settings() {
 
   useEffect(() => {
     loadPrices();
+    loadNotificationPrefs();
   }, []);
+
+  const loadNotificationPrefs = async () => {
+    try {
+      setNotifLoading(true);
+      const res = await api.get('/notifications/preferences');
+      setNotifPrefs(prev => ({ ...prev, ...res.data }));
+    } catch (err) {
+      // Defaults are fine if never set
+    } finally {
+      setNotifLoading(false);
+    }
+  };
+
+  const updateNotifPref = async (key, value) => {
+    const prev = notifPrefs[key];
+    setNotifPrefs(p => ({ ...p, [key]: value }));
+    setNotifSaving(key);
+    try {
+      await api.put('/notifications/preferences', { [key]: value });
+      toast.success('Preference updated');
+    } catch (err) {
+      setNotifPrefs(p => ({ ...p, [key]: prev }));
+      toast.error('Failed to update preference');
+    } finally {
+      setNotifSaving(null);
+    }
+  };
 
   const loadPrices = async () => {
     try {
@@ -205,36 +244,46 @@ export default function Settings() {
   return (
     <div className="space-y-8 pb-32 md:pb-16 max-w-6xl mx-auto animate-fade-in px-4 md:px-8">
       {/* Page Header */}
-      <div className="pt-12 md:pt-4 mb-4 md:mb-12 relative z-30">
-        <h1 className="text-3xl md:text-3xl font-black text-slate-900 tracking-tight">Settings</h1>
-        <p className="text-slate-500 font-medium text-base">Manage your business & app preferences</p>
+      <div className="pt-8 md:pt-4 mb-2 md:mb-8 relative z-30">
+        <h1 className="text-3xl md:text-4xl font-black text-slate-900 tracking-tight mb-1">Settings</h1>
+        <p className="text-slate-500 font-medium text-sm md:text-base">Manage your business & app preferences</p>
       </div>
 
-      <Tabs defaultValue="general" className="flex flex-col lg:flex-row gap-8 lg:gap-10 mt-8 relative z-10">
+      <Tabs defaultValue="general" className="flex flex-col lg:flex-row gap-6 md:gap-8 lg:gap-10 mt-4 md:mt-8 relative z-10 w-full">
         {/* Navigation Sidebar */}
-        <aside className="lg:w-64 flex-shrink-0 lg:sticky lg:top-24 z-20">
-          <TabsList className="flex flex-row lg:flex-col overflow-x-auto lg:overflow-visible items-center lg:items-stretch gap-2 bg-slate-50/50 p-2 rounded-2xl lg:bg-transparent lg:p-0 no-scrollbar w-full h-auto sticky top-0 lg:relative z-20 backdrop-blur-sm lg:backdrop-blur-none border border-slate-100 lg:border-none">
-            {[
-              { id: 'general', icon: Store, label: 'General' },
-              { id: 'pricing', icon: Wallet, label: 'Pricing' },
-              { id: 'workflows', icon: Zap, label: 'Workflows' },
-              { id: 'security', icon: Shield, label: 'Security' }
-            ].map(({ id, icon: Icon, label }) => (
-              <TabsTrigger
-                key={id}
-                value={id}
-                className="
-                  flex-shrink-0 flex items-center gap-3 px-4 py-3 rounded-full lg:rounded-xl text-sm font-bold border border-transparent
-                  data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-md
-                  lg:data-[state=active]:bg-white lg:data-[state=active]:text-slate-900 lg:data-[state=active]:border-slate-200 lg:data-[state=active]:shadow-sm
-                  text-slate-500 hover:text-slate-900 transition-all duration-200
-                "
-              >
-                <Icon size={18} strokeWidth={2.5} />
-                <span>{label}</span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
+        <aside className="w-full lg:w-64 flex-shrink-0 lg:sticky lg:top-28 z-40 lg:z-20">
+          <div className="relative -mx-4 px-4 md:mx-0 md:px-0">
+            {/* Scrollable tabs wrapper */}
+
+            <TabsList className="
+              flex flex-row lg:flex-col justify-start overflow-x-auto lg:overflow-visible items-center lg:items-stretch gap-2 
+              bg-white/90 lg:bg-transparent p-2 lg:p-0 rounded-2xl lg:rounded-none no-scrollbar w-full h-auto 
+              relative z-30 backdrop-blur-xl border border-slate-200/60 lg:border-none
+              shadow-lg shadow-slate-200/40 lg:shadow-none
+            ">
+              {[
+                { id: 'general', icon: Store, label: 'General' },
+                { id: 'pricing', icon: Wallet, label: 'Pricing' },
+                { id: 'workflows', icon: Zap, label: 'Workflows' },
+                { id: 'security', icon: Shield, label: 'Security' },
+                { id: 'notifications', icon: Bell, label: 'Alerts' }
+              ].map(({ id, icon: Icon, label }) => (
+                <TabsTrigger
+                  key={id}
+                  value={id}
+                  className="
+                    flex-shrink-0 flex items-center gap-2.5 px-5 py-3 lg:py-2.5 rounded-full lg:rounded-xl text-sm font-black border-2 border-transparent
+                    data-[state=active]:bg-slate-900 data-[state=active]:text-white data-[state=active]:shadow-xl data-[state=active]:shadow-slate-900/20 data-[state=active]:scale-105
+                    lg:data-[state=active]:scale-100 lg:data-[state=active]:bg-white lg:data-[state=active]:text-slate-900 lg:data-[state=active]:border-slate-200 lg:data-[state=active]:shadow-md
+                    text-slate-500 hover:text-slate-900 hover:bg-slate-100 lg:hover:bg-transparent transition-all duration-300
+                  "
+                >
+                  <Icon size={18} strokeWidth={2.5} className="md:w-4 md:h-4 lg:stroke-[3px]" />
+                  <span>{label}</span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </div>
         </aside>
 
         {/* Content Area */}
@@ -244,34 +293,34 @@ export default function Settings() {
           <TabsContent value="general" className="mt-0 space-y-6 animate-in slide-in-from-right-4 fade-in duration-300">
             <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
               {/* Identity Card */}
-              <Card className="p-5 md:p-8 flex flex-col gap-8 bg-white shadow-sm border-slate-100">
+              <Card className="p-5 md:p-8 flex flex-col gap-8 bg-white/80 backdrop-blur-xl shadow-lg shadow-slate-200/40 border-slate-100/60 rounded-[32px] hover:shadow-xl hover:border-indigo-100/50 transition-all duration-500">
                 <div className="flex items-center gap-4">
-                  <div className="w-12 h-12 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-700">
-                    <Store size={22} strokeWidth={2.5} />
+                  <div className="w-14 h-14 bg-gradient-to-br from-indigo-50 to-blue-50 text-indigo-600 rounded-2xl flex items-center justify-center shadow-inner border border-indigo-100/50">
+                    <Store size={26} strokeWidth={2.5} />
                   </div>
                   <div>
-                    <h3 className="text-lg font-bold text-slate-900 leading-tight">Brand Details</h3>
+                    <h3 className="text-xl font-black text-slate-900 leading-tight">Brand Details</h3>
                     <p className="text-slate-500 text-sm font-medium">Business name & owner info</p>
                   </div>
                 </div>
 
-                <div className="space-y-6">
+                <div className="space-y-7">
                   {/* Business Name */}
                   <div className="space-y-3">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest px-1">Business Name</label>
-                    <div className="relative">
+                    <label className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">Business Name</label>
+                    <div className="relative group">
                       <Input
                         value={editCompanyName}
                         onChange={(e) => setEditCompanyName(e.target.value)}
                         maxLength={50}
-                        className="h-12 text-lg font-bold border-slate-200 focus:border-slate-900 transition-all px-4 bg-slate-50/50 focus:bg-white rounded-xl"
+                        className="h-14 text-lg font-bold border-slate-200 focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all px-4 md:px-5 bg-slate-50/50 focus:bg-white rounded-2xl"
                         placeholder="e.g. Thanni Canuuu"
                       />
                     </div>
                     <Button
                       onClick={saveCompanyName}
                       disabled={savingCompanyName}
-                      className="w-full h-11 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl"
+                      className="w-full h-14 bg-slate-900 hover:bg-slate-800 text-white font-black rounded-2xl shadow-lg shadow-slate-900/10 active:scale-[0.98] transition-all"
                     >
                       {savingCompanyName ? 'Saving...' : 'Save Name'}
                     </Button>
@@ -281,19 +330,19 @@ export default function Settings() {
 
                   {/* Owner Name */}
                   <div className="space-y-3">
-                    <label className="text-xs font-bold text-slate-400 uppercase tracking-widest px-1">Owner Name</label>
+                    <label className="text-xs font-black text-slate-400 uppercase tracking-widest px-1">Owner Name</label>
                     <Input
                       value={editOwnerName}
                       onChange={(e) => setEditOwnerName(e.target.value)}
                       maxLength={50}
-                      className="h-11 font-medium border-slate-200 bg-slate-50/50 focus:bg-white transition-all px-4 rounded-xl"
+                      className="h-14 text-base font-bold border-slate-200 bg-slate-50/50 focus:bg-white focus:border-indigo-500 focus:ring-4 focus:ring-indigo-500/10 transition-all px-4 md:px-5 rounded-2xl"
                       placeholder="Enter owner name"
                     />
                     <Button
                       onClick={saveOwnerName}
                       disabled={savingProfile}
-                      variant="secondary"
-                      className="w-full h-10 text-sm font-bold border-slate-200 text-slate-600 rounded-xl"
+                      variant="outline"
+                      className="w-full h-12 text-sm font-bold border-slate-200 text-slate-600 hover:bg-slate-50 hover:text-slate-900 rounded-2xl block border-2"
                     >
                       {savingProfile ? 'Saving...' : 'Update Owner'}
                     </Button>
@@ -303,15 +352,15 @@ export default function Settings() {
 
               {/* Logo & Preview */}
               <div className="space-y-6">
-                <Card className="p-5 md:p-8 bg-white shadow-sm border-slate-100">
-                  <div className="flex items-center justify-between mb-6">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-slate-50 rounded-xl flex items-center justify-center text-slate-700">
-                        <Camera size={20} className="stroke-[2.5]" />
+                <Card className="p-5 md:p-8 bg-white/80 backdrop-blur-xl shadow-lg shadow-slate-200/40 border-slate-100/60 rounded-[32px]">
+                  <div className="flex items-center justify-between mb-8">
+                    <div className="flex items-center gap-4">
+                      <div className="w-14 h-14 bg-gradient-to-br from-rose-50 to-orange-50 rounded-2xl flex items-center justify-center text-rose-500 shadow-inner border border-rose-100/50">
+                        <Camera size={26} strokeWidth={2.5} />
                       </div>
                       <div>
-                        <h3 className="font-bold text-slate-900">Brand Logo</h3>
-                        <p className="text-xs text-slate-500 font-medium">For invoices & headers</p>
+                        <h3 className="text-xl font-black text-slate-900 leading-tight">Brand Logo</h3>
+                        <p className="text-sm text-slate-500 font-medium">For invoices & headers</p>
                       </div>
                     </div>
                   </div>
@@ -367,15 +416,18 @@ export default function Settings() {
 
           {/* PRICING SETTINGS */}
           <TabsContent value="pricing" className="mt-0 space-y-6 animate-in slide-in-from-right-4 fade-in duration-300">
-            <div className="flex flex-col gap-4">
-              <div className="bg-slate-50 border border-slate-200 rounded-2xl p-5 md:p-6">
-                <h3 className="font-bold text-slate-900 flex items-center gap-2 mb-2">
-                  <Wallet size={18} className="text-slate-500" />
-                  Order Pricing
-                </h3>
-                <p className="text-sm text-slate-600 leading-relaxed">
-                  Set the price per can for your customers. Toggle functionality to temporarily hide a product from new orders.
-                </p>
+            <div className="flex flex-col gap-6">
+              <div className="bg-slate-900 text-white rounded-[32px] p-6 md:p-8 relative overflow-hidden shadow-2xl shadow-slate-900/20">
+                <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-[80px] -translate-y-1/2 translate-x-1/2"></div>
+                <div className="relative z-10">
+                  <h3 className="text-2xl font-black flex items-center gap-3 mb-2">
+                    <Wallet size={24} className="text-emerald-400" />
+                    Order Pricing
+                  </h3>
+                  <p className="text-slate-400 font-medium leading-relaxed max-w-md">
+                    Set the price per can for your customers. Toggle functionality to temporarily hide a product from new orders.
+                  </p>
+                </div>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -386,23 +438,23 @@ export default function Settings() {
                     `}>
                     <div className="flex justify-between items-start mb-8">
                       <div className="flex gap-4 items-center">
-                        <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-lg font-black ${price.is_active ? 'bg-slate-900 text-white' : 'bg-slate-200 text-slate-500'}`}>
+                        <div className={`w-14 h-14 rounded-2xl flex items-center justify-center text-xl font-black transition-all ${price.is_active ? 'bg-slate-900 text-white shadow-xl shadow-slate-900/20' : 'bg-slate-200 text-slate-500 border-2 border-slate-300 border-dashed'}`}>
                           {price.litre_size}L
                         </div>
                         <div>
-                          <h3 className="font-bold text-slate-900 text-lg leading-none">Standard Can</h3>
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mt-1 block">
+                          <h3 className="font-black text-slate-900 text-xl leading-none">Standard Can</h3>
+                          <span className={`text-xs font-bold uppercase tracking-widest mt-1.5 block ${price.is_active ? 'text-emerald-500' : 'text-slate-400'}`}>
                             {price.is_active ? 'Active Product' : 'Hidden'}
                           </span>
                         </div>
                       </div>
-                      <Switch checked={price.is_active} onCheckedChange={() => toggleActive(price.litre_size)} />
+                      <Switch checked={price.is_active} onCheckedChange={() => toggleActive(price.litre_size)} className={`scale-110 ${price.is_active ? 'data-[state=checked]:bg-emerald-500' : ''}`} />
                     </div>
 
-                    <div className="bg-slate-50 rounded-2xl p-2 flex items-center justify-between border border-slate-100">
+                    <div className="bg-slate-50/50 rounded-[24px] p-2 flex items-center justify-between border border-slate-100">
                       <button
                         onClick={() => updatePrice(price.litre_size, price.price_per_can - 5)}
-                        className="w-12 h-12 bg-white rounded-xl shadow-sm border border-slate-200 flex items-center justify-center hover:scale-105 active:scale-95 transition-all text-slate-600 disabled:opacity-50"
+                        className="w-14 h-14 bg-white rounded-[20px] shadow-sm border border-slate-200 flex items-center justify-center hover:bg-slate-50 hover:scale-105 active:scale-95 transition-all text-slate-600 disabled:opacity-50"
                         disabled={!price.is_active}
                       >
                         <Minus size={20} strokeWidth={2.5} />
@@ -472,7 +524,7 @@ export default function Settings() {
                 <div className="flex-1 min-w-0">
                   <div className="flex flex-col md:flex-row items-center md:items-center gap-2 md:gap-3 mb-2">
                     <h2 className="text-xl md:text-2xl font-bold tracking-tight truncate max-w-full">{companyName}</h2>
-                    <Badge className="bg-emerald-500 text-white border-0 px-2 py-0.5 text-xs">VERIFIED MERCHANT</Badge>
+                    <Badge variant="success" className="border-emerald-500/20 font-black">VERIFIED MERCHANT</Badge>
                   </div>
                   <div className="space-y-1 text-slate-400 font-medium text-sm md:text-base">
                     <p className="flex items-center justify-center md:justify-start gap-2">
@@ -559,6 +611,51 @@ export default function Settings() {
                 </div>
               </Card>
             </div>
+          </TabsContent>
+
+          {/* NOTIFICATIONS */}
+          <TabsContent value="notifications" className="mt-0 space-y-4 md:space-y-6 animate-in slide-in-from-right-4 fade-in duration-300">
+            <Card className="p-5 md:p-8 bg-white shadow-sm border-slate-100">
+              <div className="flex items-center gap-4 mb-8">
+                <div className="w-12 h-12 bg-amber-50 rounded-2xl flex items-center justify-center text-amber-600">
+                  <BellRing size={22} strokeWidth={2.5} />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-slate-900">Notification Preferences</h2>
+                  <p className="text-sm text-slate-500 font-medium">Control what alerts you receive</p>
+                </div>
+              </div>
+
+              <div className="space-y-1">
+                {[
+                  { key: 'order_alerts', icon: Package, label: 'Order Alerts', desc: 'New orders, deliveries, and cancellations', color: 'text-sky-500', bg: 'bg-sky-50' },
+                  { key: 'payment_alerts', icon: CreditCard, label: 'Payment Alerts', desc: 'Payment confirmations and pending dues', color: 'text-emerald-500', bg: 'bg-emerald-50' },
+                  { key: 'system_alerts', icon: AlertTriangle, label: 'System Alerts', desc: 'Stock warnings and app updates', color: 'text-amber-500', bg: 'bg-amber-50' },
+                  { key: 'sound_enabled', icon: Volume2, label: 'Sound', desc: 'Play notification sounds', color: 'text-violet-500', bg: 'bg-violet-50' },
+                  { key: 'push_enabled', icon: Smartphone, label: 'Push Notifications', desc: 'Receive alerts on your device', color: 'text-rose-500', bg: 'bg-rose-50' },
+                ].map(({ key, icon: Icon, label, desc, color, bg }) => (
+                  <div
+                    key={key}
+                    className="flex items-center justify-between p-4 rounded-2xl hover:bg-slate-50 transition-colors group"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className={`w-10 h-10 ${bg} rounded-xl flex items-center justify-center ${color} transition-transform group-hover:scale-110`}>
+                        <Icon size={20} strokeWidth={2.5} />
+                      </div>
+                      <div>
+                        <p className="font-bold text-slate-900 text-sm">{label}</p>
+                        <p className="text-xs text-slate-400 font-medium">{desc}</p>
+                      </div>
+                    </div>
+                    <Switch
+                      checked={notifPrefs[key]}
+                      onCheckedChange={(v) => updateNotifPref(key, v)}
+                      disabled={notifSaving === key}
+                    />
+                  </div>
+                ))}
+              </div>
+            </Card>
           </TabsContent>
 
         </div>

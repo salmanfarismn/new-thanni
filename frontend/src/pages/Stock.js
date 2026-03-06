@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { api, API_BASE_URL } from '../context/AppContext';
 import { Plus, Minus, Archive, RefreshCw, AlertCircle, AlertTriangle, X, Trash2, Check, Camera, Hash, CheckCircle2, Droplets, Zap, AlertOctagon, Undo2, Truck, FileText, User, Eye, Clock } from 'lucide-react';
 import { toast } from 'sonner';
+import { useWebSocket } from '../hooks/useWebSocket';
 import Card from '../components/ui/card';
 import Button from '../components/ui/button';
 import Badge from '../components/ui/badge';
@@ -40,12 +41,38 @@ export default function Stock() {
   const [agentReports, setAgentReports] = useState([]);
   const [selectedPhoto, setSelectedPhoto] = useState(null);
 
+  const { on, isConnected } = useWebSocket();
+
   useEffect(() => {
     loadStock();
     loadTodayDamage();
     loadSalesData();
     loadAgentReports();
   }, [dateFilter]); // Reload when filter changes
+
+  // Real-time WebSocket updates
+  useEffect(() => {
+    const cleanups = [
+      on('stock_update', (data) => {
+        // Only toast if it's not from a manual update in this tab (to avoid double toast)
+        if (data.source !== 'manual') {
+          toast.info('Stock updated', {
+            description: `Available stock is now ${data.available_stock || 'updated'}`
+          });
+        }
+        loadStock();
+      }),
+      on('damage_report', (data) => {
+        toast.error(`Damage reported by ${data.agent_name}`, {
+          description: `${data.damaged_qty} cans (${data.litre_size}L) - ${data.reason.replace(/_/g, ' ')}`
+        });
+        loadStock();
+        loadTodayDamage();
+        loadAgentReports();
+      })
+    ];
+    return () => cleanups.forEach(fn => fn());
+  }, [on]);
 
   const loadStock = async () => {
     try {
@@ -170,7 +197,15 @@ export default function Stock() {
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-4">
         <div>
-          <h1 className="text-3xl font-black text-slate-900 tracking-tight">Stock Manager</h1>
+          <h1 className="text-3xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+            Stock Manager
+            {isConnected && (
+              <span className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-black uppercase tracking-widest rounded-full border border-emerald-100">
+                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                Live
+              </span>
+            )}
+          </h1>
           <p className="text-slate-500 font-medium text-sm">Real-time inventory control</p>
         </div>
         <div className="flex items-center gap-3">
@@ -340,21 +375,21 @@ export default function Stock() {
             <div className="flex bg-slate-50 p-1.5 rounded-t-[32px] border-b border-slate-100">
               <button
                 onClick={() => { setMode('add'); setQuantity(0); }}
-                className={`flex-1 py-3 rounded-2xl text-sm font-black transition-all flex items-center justify-center gap-2 ${isAdd ? 'bg-white text-emerald-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                className={`flex-1 py-3.5 rounded-2xl text-sm font-black transition-all flex items-center justify-center gap-2 relative overflow-hidden ${isAdd ? 'bg-white text-emerald-600 shadow-xl shadow-emerald-500/10 scale-100 ring-1 ring-emerald-100' : 'text-slate-400 hover:text-slate-600 hover:bg-white/50 scale-95'
                   }`}
               >
-                <Plus size={16} strokeWidth={3} /> Replenish
+                <Plus size={18} strokeWidth={3} className={isAdd ? 'animate-pulse-slow' : ''} /> Replenish
               </button>
               <button
                 onClick={() => { setMode('reduce'); setQuantity(0); }}
-                className={`flex-1 py-3 rounded-2xl text-sm font-black transition-all flex items-center justify-center gap-2 ${!isAdd ? 'bg-white text-rose-600 shadow-sm' : 'text-slate-400 hover:text-slate-600'
+                className={`flex-1 py-3.5 rounded-2xl text-sm font-black transition-all flex items-center justify-center gap-2 relative overflow-hidden ${!isAdd ? 'bg-white text-rose-600 shadow-xl shadow-rose-500/10 scale-100 ring-1 ring-rose-100' : 'text-slate-400 hover:text-slate-600 hover:bg-white/50 scale-95'
                   }`}
               >
-                <Minus size={16} strokeWidth={3} /> Deduct
+                <Minus size={18} strokeWidth={3} className={!isAdd ? 'animate-pulse-slow' : ''} /> Deduct
               </button>
             </div>
 
-            <div className="p-6 sm:p-8 bg-white">
+            <div className="p-6 md:p-10 bg-white">
 
               {/* Main Input */}
               <div className="flex items-center justify-center gap-4 sm:gap-6 mb-8">
@@ -385,14 +420,14 @@ export default function Stock() {
               </div>
 
               {/* Quick Presets */}
-              <div className="grid grid-cols-4 gap-2 mb-8">
+              <div className="grid grid-cols-4 gap-3 mb-10">
                 {[5, 10, 25, 50].map((val) => (
                   <button
                     key={val}
                     onClick={() => setQuantity(quantity + val)}
-                    className={`py-2 rounded-xl text-xs font-bold border transition-all active:scale-95 ${isAdd
-                      ? 'bg-emerald-50 border-emerald-100 text-emerald-600 hover:bg-emerald-100'
-                      : 'bg-rose-50 border-rose-100 text-rose-600 hover:bg-rose-100'
+                    className={`py-3 rounded-[20px] text-sm font-black border transition-all active:scale-[0.92] ${isAdd
+                      ? 'bg-emerald-50/50 border-emerald-100/50 text-emerald-600 hover:bg-emerald-100 hover:shadow-lg hover:shadow-emerald-500/10'
+                      : 'bg-rose-50/50 border-rose-100/50 text-rose-600 hover:bg-rose-100 hover:shadow-lg hover:shadow-rose-500/10'
                       }`}
                   >
                     +{val}
@@ -405,9 +440,9 @@ export default function Stock() {
                 onClick={handleUpdate}
                 isLoading={updating}
                 disabled={updating || quantity <= 0}
-                className={`w-full py-5 sm:py-6 h-auto rounded-2xl text-base sm:text-lg font-black shadow-lg shadow-current/20 transition-all hover:scale-[1.02] active:scale-[0.98] ${isAdd
-                  ? 'bg-emerald-500 hover:bg-emerald-600 shadow-emerald-500/30'
-                  : 'bg-rose-500 hover:bg-rose-600 shadow-rose-500/30'
+                className={`w-full py-6 md:py-7 h-auto rounded-[24px] text-lg font-black transition-all hover:-translate-y-1 active:scale-[0.98] ${isAdd
+                  ? 'bg-gradient-to-r from-emerald-500 to-emerald-400 hover:from-emerald-400 hover:to-emerald-300 shadow-2xl shadow-emerald-500/30 border border-emerald-400/50 text-white'
+                  : 'bg-gradient-to-r from-rose-500 to-rose-400 hover:from-rose-400 hover:to-rose-300 shadow-2xl shadow-rose-500/30 border border-rose-400/50 text-white'
                   }`}
               >
                 {isAdd ? 'Confirm Receipt' : 'Confirm Deduction'}
@@ -592,6 +627,21 @@ export default function Stock() {
                   >
                     <Plus size={20} strokeWidth={3} />
                   </button>
+                </div>
+                {/* Quick-entry presets */}
+                <div className="flex gap-1.5 mt-2">
+                  {[1, 2, 5, 10].map(q => (
+                    <button
+                      key={q}
+                      onClick={() => setDamageData(prev => ({ ...prev, quantity: q }))}
+                      className={`flex-1 py-1.5 rounded-lg text-xs font-bold transition-all ${damageData.quantity === q
+                        ? 'bg-red-500 text-white shadow-sm'
+                        : 'bg-red-50 text-red-400 hover:bg-red-100 active:scale-95'
+                        }`}
+                    >
+                      {q}
+                    </button>
+                  ))}
                 </div>
               </div>
 

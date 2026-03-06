@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react';
 import { api } from '../context/AppContext';
 import { Package, TruckIcon, Filter, Search, CheckCircle, XCircle, IndianRupee, RefreshCw, Bell, Calendar, ChevronDown, MoreHorizontal, Eye, Clock, Users, Plus, Minus, User, MapPin, Hash, AlertCircle, Droplets, PhoneCall, MessageCircle, CreditCard, Wallet, Banknote, Navigation } from 'lucide-react';
 import { toast } from 'sonner';
+import { SoundService } from '../utils/SoundService';
+import { useWebSocket } from '../hooks/useWebSocket';
 import Card from '../components/ui/card';
 import Badge from '../components/ui/badge';
 import Button from '../components/ui/button';
@@ -41,6 +43,8 @@ export default function Orders() {
   const [isReassignModalOpen, setIsReassignModalOpen] = useState(false);
   const [newAgentId, setNewAgentId] = useState('');
 
+  const { on, isConnected } = useWebSocket();
+
   // Handle URL parameters for filtering
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -63,13 +67,45 @@ export default function Orders() {
   useEffect(() => {
     loadOrders();
     loadOutstandingSummary();
-    const interval = setInterval(() => {
-      loadOrders();
-      loadOutstandingSummary();
-    }, 10000);
-    return () => clearInterval(interval);
+    // Polling removed in favor of WebSockets
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filter]);
+
+  // Real-time WebSocket updates
+  useEffect(() => {
+    const cleanups = [
+      on('new_order', (data) => {
+        SoundService.playWaterDrop();
+        toast.info(`New order received: ${data.customer_name}`, {
+          description: `Order #${data.order_id?.slice(-6)} - ₹${data.amount}`,
+          action: {
+            label: 'View',
+            onClick: () => {
+              setFilter('all');
+              setSearchTerm(data.order_id);
+            }
+          }
+        });
+        loadOrders();
+        loadOutstandingSummary();
+      }),
+      on('order_delivered', (data) => {
+        toast.success(`Order delivered: ${data.customer_name}`, {
+          description: `Delivered by ${data.agent_name}. Payment: ${data.payment_status.replace(/_/g, ' ')}`
+        });
+        loadOrders();
+        loadOutstandingSummary();
+      }),
+      on('payment_update', (data) => {
+        toast.success(`Payment confirmed: ${data.customer_name}`, {
+          description: `Amount: ₹${data.amount}`
+        });
+        loadOrders();
+        loadOutstandingSummary();
+      })
+    ];
+    return () => cleanups.forEach(fn => fn());
+  }, [on]);
 
   useEffect(() => {
     loadDeliveryAgents();
@@ -303,7 +339,15 @@ export default function Orders() {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-6">
         <div>
-          <h1 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight">Orders</h1>
+          <h1 className="text-3xl sm:text-4xl font-black text-slate-900 tracking-tight flex items-center gap-3">
+            Orders
+            {isConnected && (
+              <span className="flex items-center gap-1.5 px-3 py-1 bg-emerald-50 text-emerald-600 text-[10px] font-black uppercase tracking-widest rounded-full border border-emerald-100">
+                <span className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                Live
+              </span>
+            )}
+          </h1>
           <p className="text-slate-500 font-medium mt-1">Manage and track your water deliveries</p>
         </div>
         <Button
@@ -452,30 +496,32 @@ export default function Orders() {
         <div className="flex-1 space-y-8">
 
           {/* Mobile Filters */}
-          <div className="lg:hidden flex overflow-x-auto gap-2 pb-2 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0">
-            {[
-              { id: 'all', label: 'All', icon: Package },
-              { id: 'pending', label: 'Pending', icon: Clock },
-              { id: 'delivered', label: 'Delivered', icon: CheckCircle },
-              { id: 'unpaid', label: 'Unpaid', icon: AlertCircle, color: 'red-500' },
-              { id: 'upi-pending', label: 'UPI Wait', icon: CreditCard, color: 'purple-500' },
-              { id: 'cash-due', label: 'Cash Due', icon: Wallet, color: 'orange-500' },
-            ].map((item) => (
-              <button
-                key={item.id}
-                onClick={() => setFilter(item.id)}
-                className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-black whitespace-nowrap transition-all border ${filter === item.id
-                  ? 'bg-slate-900 text-white border-slate-900 shadow-lg shadow-slate-900/20'
-                  : 'bg-white text-slate-500 border-slate-200'
-                  }`}
-              >
-                {(() => {
-                  const Icon = item.icon;
-                  return <Icon size={14} className={filter === item.id ? 'text-white' : (item.color ? `text-${item.color}` : 'text-slate-400')} />;
-                })()}
-                <span>{item.label}</span>
-              </button>
-            ))}
+          <div className="lg:hidden relative">
+            <div className="flex overflow-x-auto gap-2 pb-2 no-scrollbar -mx-4 px-4 sm:mx-0 sm:px-0 relative z-0">
+              {[
+                { id: 'all', label: 'All', icon: Package },
+                { id: 'pending', label: 'Pending', icon: Clock },
+                { id: 'delivered', label: 'Delivered', icon: CheckCircle },
+                { id: 'unpaid', label: 'Unpaid', icon: AlertCircle, color: 'text-red-500' },
+                { id: 'upi-pending', label: 'UPI Wait', icon: CreditCard, color: 'text-purple-500' },
+                { id: 'cash-due', label: 'Cash Due', icon: Wallet, color: 'text-orange-500' },
+              ].map((item) => (
+                <button
+                  key={item.id}
+                  onClick={() => setFilter(item.id)}
+                  className={`flex items-center gap-2 px-5 py-3 rounded-full text-xs font-black whitespace-nowrap transition-all border-2 ${filter === item.id
+                    ? 'bg-slate-900 text-white border-slate-900 shadow-xl shadow-slate-900/20 scale-105'
+                    : 'bg-white text-slate-500 border-transparent shadow-sm hover:shadow-md hover:scale-105 hover:text-slate-900'
+                    }`}
+                >
+                  {(() => {
+                    const Icon = item.icon;
+                    return <Icon size={16} strokeWidth={2.5} className={filter === item.id ? 'text-white' : (item.color ? item.color : 'text-slate-400')} />;
+                  })()}
+                  <span>{item.label}</span>
+                </button>
+              ))}
+            </div>
           </div>
 
           {/* Collection Dashboard Summary (Contextual) */}
@@ -545,7 +591,7 @@ export default function Orders() {
                     >
                       <TableCell className="py-6 pl-8">
                         <div className="font-mono text-[10px] font-black text-slate-400 bg-slate-100 px-2 py-1 rounded w-fit mb-1">{order.order_id}</div>
-                        <div className="text-xs font-bold text-slate-400">{new Date(order.created_at).toLocaleDateString()}</div>
+                        <div className="text-xs font-bold text-slate-400">{new Date(order.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}, {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                       </TableCell>
                       <TableCell>
                         <div className="font-black text-slate-900">{order.customer_name}</div>
@@ -575,36 +621,45 @@ export default function Orders() {
               </Table>
             </div>
 
-            {/* Mobile View: Cards (Updated to match dashboard style) */}
-            <div className="lg:hidden space-y-4">
+            {/* Mobile View: Cards (Updated) */}
+            <div className="lg:hidden space-y-5 px-1 pb-4">
               {loading ? (
                 <div className="py-20 text-center"><RefreshCw className="animate-spin mx-auto h-10 w-10 text-slate-200" /></div>
               ) : filteredOrders.map((order) => (
                 <div
                   key={order.order_id}
                   onClick={() => { setSelectedOrder(order); setIsDialogOpen(true); }}
-                  className="bg-white p-5 rounded-[24px] border border-slate-100 shadow-sm active:scale-[0.98] transition-all relative overflow-hidden"
+                  className="bg-white/80 backdrop-blur-xl p-6 rounded-[32px] border border-slate-100/60 shadow-lg shadow-slate-200/40 active:scale-[0.98] active:shadow-sm hover:shadow-xl transition-all relative overflow-hidden group"
                 >
-                  <div className={`absolute top-0 left-0 w-1.5 h-full ${order.status === 'delivered' ? 'bg-emerald-500' : isUnpaidStatus(order.payment_status) ? 'bg-red-500' : 'bg-amber-500'}`} />
+                  <div className={`absolute top-0 left-0 w-2 h-full ${order.status === 'delivered' ? 'bg-emerald-500' : isUnpaidStatus(order.payment_status) ? 'bg-red-500' : 'bg-amber-500'}`} />
+
                   <div className="flex justify-between items-start mb-6">
-                    <div>
-                      <div className="text-[10px] font-black text-slate-400 tracking-tighter bg-slate-100 px-2 py-1 rounded uppercase mb-2 w-fit">{order.order_id}</div>
-                      <h4 className="font-black text-slate-900 text-xl tracking-tight leading-none">{order.customer_name}</h4>
+                    <div className="pl-1">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="text-[10px] font-black text-slate-500 tracking-wider bg-slate-100/80 backdrop-blur-sm px-2.5 py-1 rounded-md uppercase w-fit">{order.order_id}</div>
+                        <div className="text-[10px] font-bold text-slate-400 tracking-wider flex items-center gap-1">
+                          <Clock size={10} />
+                          {new Date(order.created_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}, {new Date(order.created_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                        </div>
+                      </div>
+                      <h4 className="font-black text-slate-900 text-2xl tracking-tight leading-none mt-1">{order.customer_name}</h4>
                     </div>
                     {getStatusBadge(order.status)}
                   </div>
 
-                  <div className="flex justify-between items-end pt-6 border-t border-slate-50">
-                    <div className="space-y-3">
-                      <div className="flex items-center gap-2 text-xs font-black text-slate-400">
-                        <Droplets size={14} className="text-sky-500" /> {order.quantity} x {order.litre_size}L
+                  <div className="flex justify-between items-end pt-5 border-t border-slate-100/80 pl-1">
+                    <div className="space-y-3.5">
+                      <div className="flex items-center gap-2 text-sm font-black text-slate-500">
+                        <Droplets size={16} strokeWidth={2.5} className="text-sky-500" /> {order.quantity} x {order.litre_size}L
                       </div>
-                      {getPaymentBadge(order.payment_status, order.payment_method, order.amount_due)}
+                      <div className="-ml-1">
+                        {getPaymentBadge(order.payment_status, order.payment_method, order.amount_due)}
+                      </div>
                     </div>
                     <div className="text-right">
-                      <div className="text-3xl font-black text-slate-900 tracking-tighter leading-none">₹{order.amount}</div>
-                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1">
-                        {isUnpaidStatus(order.payment_status) ? 'Due' : 'Total'}
+                      <div className="text-4xl font-black text-slate-900 tracking-tighter leading-none group-active:scale-95 transition-transform">₹{order.amount}</div>
+                      <div className="text-[10px] font-black text-slate-400 uppercase tracking-widest mt-1.5 flex justify-end gap-1 items-center">
+                        {isUnpaidStatus(order.payment_status) ? <><AlertCircle size={10} className="text-red-400" /> Due</> : <><CheckCircle size={10} className="text-emerald-400" /> Total</>}
                       </div>
                     </div>
                   </div>

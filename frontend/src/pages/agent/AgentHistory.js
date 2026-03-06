@@ -15,23 +15,45 @@ export default function AgentHistory() {
     const [history, setHistory] = useState([]);
     const [summary, setSummary] = useState({});
     const [loading, setLoading] = useState(true);
-    const [days, setDays] = useState(7);
+    const [days, setDays] = useState('30');
+    const [customStart, setCustomStart] = useState('');
+    const [customEnd, setCustomEnd] = useState('');
+    const [showCustomRange, setShowCustomRange] = useState(false);
+
+    const fetchHistory = async () => {
+        setLoading(true);
+        try {
+            const params = {};
+            if (days === 'custom') {
+                if (customStart) params.start_date = customStart;
+                if (customEnd) params.end_date = customEnd;
+            } else {
+                params.days = days;
+            }
+            const res = await api.get('/agent/history', { params });
+            setHistory(res.data.history || []);
+            setSummary(res.data.summary || {});
+        } catch (err) {
+            toast.error('Failed to load history');
+        } finally {
+            setLoading(false);
+        }
+    };
 
     useEffect(() => {
-        const fetchHistory = async () => {
-            setLoading(true);
-            try {
-                const res = await api.get('/agent/history', { params: { days } });
-                setHistory(res.data.history || []);
-                setSummary(res.data.summary || {});
-            } catch (err) {
-                toast.error('Failed to load history');
-            } finally {
-                setLoading(false);
-            }
-        };
-        fetchHistory();
+        if (days !== 'custom') {
+            fetchHistory();
+        }
     }, [days]);
+
+    const applyCustomRange = () => {
+        if (!customStart || !customEnd) {
+            toast.error('Please select both start and end dates');
+            return;
+        }
+        setShowCustomRange(false);
+        fetchHistory();
+    };
 
     // Group deliveries by date
     const groupByDate = (items) => {
@@ -97,16 +119,58 @@ export default function AgentHistory() {
                 <div className="relative">
                     <select
                         value={days}
-                        onChange={(e) => setDays(Number(e.target.value))}
-                        className="appearance-none bg-white border border-slate-200 rounded-2xl pl-4 pr-10 py-2 text-xs font-bold text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 shadow-sm"
+                        onChange={(e) => {
+                            const val = e.target.value;
+                            setDays(val);
+                            if (val === 'custom') {
+                                setShowCustomRange(true);
+                            } else {
+                                setShowCustomRange(false);
+                            }
+                        }}
+                        className="appearance-none bg-white border border-slate-200 rounded-2xl pl-4 pr-10 py-2 text-xs font-bold text-slate-600 focus:outline-none focus:ring-2 focus:ring-emerald-500/20 shadow-sm transition-all"
                     >
-                        <option value={7}>Last 7 Days</option>
-                        <option value={14}>Last 14 Days</option>
-                        <option value={30}>Last 30 Days</option>
+                        <option value="1">Today</option>
+                        <option value="7">Last 7 Days</option>
+                        <option value="14">Last 14 Days</option>
+                        <option value="30">Last 30 Days</option>
+                        <option value="custom">Custom Range...</option>
                     </select>
                     <Filter className="w-3 h-3 text-slate-400 absolute right-3 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
             </div>
+
+            {/* Custom Range Picker */}
+            {showCustomRange && (
+                <div className="bg-white p-4 rounded-2xl border border-slate-100 shadow-sm mx-1 animate-in fade-in zoom-in-95 duration-200">
+                    <div className="flex flex-col sm:flex-row items-end gap-3">
+                        <div className="flex-1 w-full">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">Start Date</label>
+                            <input
+                                type="date"
+                                value={customStart}
+                                onChange={(e) => setCustomStart(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:border-emerald-500 pb-2"
+                            />
+                        </div>
+                        <div className="flex-1 w-full">
+                            <label className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1 block">End Date</label>
+                            <input
+                                type="date"
+                                value={customEnd}
+                                onChange={(e) => setCustomEnd(e.target.value)}
+                                className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 focus:outline-none focus:border-emerald-500 pb-2"
+                            />
+                        </div>
+                        <button
+                            onClick={applyCustomRange}
+                            className="bg-slate-900 text-white font-bold h-[34px] px-4 rounded-xl text-xs whitespace-nowrap active:scale-95 transition-transform shadow-lg shadow-slate-900/20 w-full sm:w-auto"
+                        >
+                            Apply Filter
+                        </button>
+                    </div>
+                </div>
+            )}
 
             {/* Summary Hero Card */}
             <div className="relative overflow-hidden bg-slate-900 rounded-[32px] p-6 text-white shadow-xl shadow-slate-900/20 mx-1">

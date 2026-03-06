@@ -13,7 +13,7 @@ async def init_database():
     client = AsyncIOMotorClient(mongo_url)
     db = client[os.environ['DB_NAME']]
     
-    print("🚀 Initializing HydroFlow database...")
+    print("🚀 Initializing Thanni Canuuu database...")
     
     # Initialize delivery staff
     existing_staff = await db.delivery_staff.count_documents({})
@@ -172,7 +172,7 @@ async def init_database():
     print("✅ Database indexes created successfully!")
     
     client.close()
-    print("\n🎉 HydroFlow database initialization complete!")
+    print("\n🎉 Thanni Canuuu database initialization complete!")
     print("\n📱 WhatsApp Bot Features:")
     print("   - Customer registration (name & address)")
     print("   - Litre size selection (20L/25L)")

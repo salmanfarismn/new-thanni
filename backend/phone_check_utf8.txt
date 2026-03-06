@@ -1,0 +1,28 @@
+﻿--- Delivery Staff ---
+Name: Rajesh Kumar | Phone: 919876543210 | ID: DS001 | Active: True
+Name: Priya Sharma | Phone: 919876543211 | ID: DS002 | Active: True
+Name: Amit Patel | Phone: 919876543212 | ID: DS003 | Active: True
+Name: Kavitha Nair | Phone: 919876543213 | ID: DS004 | Active: False
+Name: John | Phone: 88708382940 | ID: DA55328503 | Active: False
+Name: Jagan | Phone: 9349295608 | ID: DA94685780 | Active: True
+Name: Test Driver | Phone: 9999911111 | ID: STAFF-TEST-001 | Active: True
+
+--- Customers ---
+Name: Sunita Verma | Phone: 919123456781 | Vendor: 698204fa7995aa2742b439d0
+Name: Vikram Singh | Phone: 919123456782 | Vendor: 698204fa7995aa2742b439d0
+Name: Anita Desai | Phone: 919123456783 | Vendor: 698204fa7995aa2742b439d0
+Name: Ravi Krishnan | Phone: 919123456784 | Vendor: 698204fa7995aa2742b439d0
+Name: Meera Reddy | Phone: 919123456785 | Vendor: 698204fa7995aa2742b439d0
+Name: Arjun Mehta | Phone: 919123456786 | Vendor: 698204fa7995aa2742b439d0
+Name: Lakshmi Iyer | Phone: 919123456787 | Vendor: 698204fa7995aa2742b439d0
+Name: Sanjay Gupta | Phone: 919123456788 | Vendor: 698204fa7995aa2742b439d0
+Name: Direct Test User | Phone: 919988776655 | Vendor: 698204fa7995aa2742b439d0
+Name: naalem koodi ollu | Phone: 919497105203 | Vendor: 69820583c9486dbe5be440d4
+Name: Abinash | Phone: 919876543210 | Vendor: 69820583c9486dbe5be440d4
+Name: Yes, I have it but it is not public . She may ask you who gave you . | Phone: 102954661081298@lid | Vendor: 69820583c9486dbe5be440d4
+Name: Uday kumar | Phone: 83515957866586 | Vendor: 69820583c9486dbe5be440d4
+Name: Customer | Phone: 919999999999 | Vendor: None
+Name: Abinash | Phone: 255615263846572 | Vendor: 69820583c9486dbe5be440d4
+Name: Abinash | Phone: 919876543211 | Vendor: 69820583c9486dbe5be440d4
+Name: Jothimani | Phone: 126027426750545 | Vendor: 69820583c9486dbe5be440d4
+Name: hi | Phone: 918848961410 | Vendor: 69820583c9486dbe5be440d4
