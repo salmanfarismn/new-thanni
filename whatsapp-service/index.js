@@ -1195,6 +1195,22 @@ async function handleCustomerConversation(vendorId, remoteJid, messageText) {
 // API ENDPOINTS
 // ============================================
 
+// Root endpoint
+app.get('/', (req, res) => {
+    res.json({
+        service: 'Thanni Canuuu WhatsApp Service',
+        status: 'running',
+        version: '1.0.0',
+        endpoints: {
+            health: '/health',
+            vendors: '/vendors',
+            status: '/status/:vendorId',
+            qr: '/qr/:vendorId'
+        },
+        docs: 'API service for WhatsApp Business integration'
+    });
+});
+
 // Health check
 app.get('/health', (req, res) => {
     let connectedCount = 0;
