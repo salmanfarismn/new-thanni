@@ -286,11 +286,11 @@ async function initVendorWhatsApp(vendorId) {
                 auth: authState,
                 printQRInTerminal: false,
                 browser: ['Thanni Canuuu', 'Chrome', '120.0.0'],
-                // Improve stability
+                // Improve stability and QR generation responsiveness
                 connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 60000,
                 keepAliveIntervalMs: 10000,
-                generateHighQualityLinkPreview: true,
+                generateHighQualityLinkPreview: false,  // Disable to speed up initialization
                 syncFullHistory: false,
                 markOnlineOnConnect: true
             });
@@ -1223,6 +1223,28 @@ app.get('/health', (req, res) => {
         connectedVendors: connectedCount,
         uptime: process.uptime(),
         memoryUsageMB: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        timestamp: new Date().toISOString()
+    });
+});
+
+// Debug endpoint - show initialization state for all vendors
+app.get('/debug/vendors', (req, res) => {
+    const vendorStates = [];
+    for (const [vendorId, client] of vendorClients.entries()) {
+        const initAge = Date.now() - (client.initStartedAt || 0);
+        const qrAge = Date.now() - (client.qrGeneratedAt || 0);
+        vendorStates.push({
+            vendorId: vendorId.substring(0, 8),
+            connected: client.isConnected,
+            qrGenerated: !!client.qrCode,
+            initAgeSeconds: Math.round(initAge / 1000),
+            qrAgeSeconds: Math.round(qrAge / 1000),
+            lastActivity: new Date(client.lastActivity).toISOString()
+        });
+    }
+    res.json({
+        activeVendors: vendorClients.size,
+        vendors: vendorStates,
         timestamp: new Date().toISOString()
     });
 });

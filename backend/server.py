@@ -3708,11 +3708,21 @@ async def get_qr_code(vendor_id: str = Depends(get_current_vendor_id)):
     """Get QR code for connecting vendor's WhatsApp (per-vendor)"""
     try:
         async with httpx.AsyncClient() as client:
-            # Call vendor-specific endpoint
-            response = await client.get(f"{WHATSAPP_SERVICE_URL}/qr/{vendor_id}", timeout=5.0)
-            return response.json()
+            # Call vendor-specific endpoint with extended timeout for Baileys initialization
+            # Baileys can take 10-30 seconds to generate QR code
+            response = await client.get(
+                f"{WHATSAPP_SERVICE_URL}/qr/{vendor_id}", 
+                timeout=30.0  # Extended timeout for QR code generation
+            )
+            data = response.json()
+            logger.info(f"[WhatsApp] QR status for {vendor_id}: {data.get('status')}")
+            return data
+    except httpx.TimeoutException:
+        logger.warning(f"[WhatsApp] QR request timed out for {vendor_id} - WhatsApp service may be initializing")
+        return {"qr": None, "status": "initializing", "message": "WhatsApp service is initializing, please wait..."}
     except Exception as e:
-        return {"qr": None, "error": str(e)}
+        logger.error(f"[WhatsApp] Error fetching QR for {vendor_id}: {str(e)}")
+        return {"qr": None, "error": str(e), "status": "error"}
 
 @api_router.get("/whatsapp/status")
 async def get_whatsapp_status(vendor_id: str = Depends(get_current_vendor_id)):
@@ -3720,7 +3730,10 @@ async def get_whatsapp_status(vendor_id: str = Depends(get_current_vendor_id)):
     try:
         # Check Baileys service for this specific vendor
         async with httpx.AsyncClient() as client:
-            response = await client.get(f"{WHATSAPP_SERVICE_URL}/status/{vendor_id}", timeout=5.0)
+            response = await client.get(
+                f"{WHATSAPP_SERVICE_URL}/status/{vendor_id}", 
+                timeout=10.0  # Reasonable timeout for status checks
+            )
             baileys_status = response.json()
             
             if baileys_status.get('connected'):
@@ -3781,7 +3794,7 @@ async def reconnect_whatsapp(vendor_id: str = Depends(get_current_vendor_id)):
             response = await client.post(
                 f"{WHATSAPP_SERVICE_URL}/reconnect/{vendor_id}", 
                 headers=headers,
-                timeout=10.0
+                timeout=30.0  # Extended timeout for reconnection with QR generation
             )
             return response.json()
     except Exception as e:
